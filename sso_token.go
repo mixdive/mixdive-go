@@ -1,4 +1,4 @@
-package mixdive_go
+package mixdive
 
 import (
 	"time"
