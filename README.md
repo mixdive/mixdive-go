@@ -65,6 +65,41 @@ func main() {
 - **Size cap:** requests over the server's limit (32 KB by default) are
   rejected — split large batches.
 
+## Non-blocking sending
+
+`Track`/`SetUser` on `Client` are synchronous HTTP calls. When analytics
+must never slow your request path down, wrap the client in an `Async`
+dispatcher: calls enqueue onto a bounded in-memory queue and return
+immediately, and a background goroutine delivers them in order (with the
+client's usual retries). A full queue drops the newest item — analytics
+never applies back-pressure to your application.
+
+```go
+client := mixdive.New("https://analytics.example.com", "mx_your_api_key")
+analytics := mixdive.NewAsync(client,
+	mixdive.WithQueueSize(4096),                       // default 1024
+	mixdive.WithErrorHandler(func(err error) { ... }), // default log.Printf
+)
+
+// Fire-and-forget — returns immediately, never blocks.
+analytics.Track(mixdive.Event{Key: "checkout_completed", UserId: userId})
+analytics.SetUser(mixdive.User{Id: userId, Username: "ada"})
+
+// On shutdown, flush what's still queued (bounded by the context).
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+_ = analytics.Close(ctx)
+```
+
+Delivery is best-effort: items still queued when the process exits without
+a successful `Close` are lost. If the same action can be enqueued more than
+once (a task retry, for example), set `Event.OccurrenceId` to a value
+derived from your own data — the server deduplicates on it.
+
+All methods are safe no-ops on a nil `*Async`, so gating analytics is just
+not constructing it: leave the pointer nil (e.g. outside the environments
+you want tracked) and every `Track`/`SetUser`/`Close` call does nothing.
+
 ## Configuration
 
 ```go

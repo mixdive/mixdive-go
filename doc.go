@@ -7,6 +7,10 @@
 // accepted data and reports typically reflect it within a minute. Every
 // event carries an idempotency id, so retries never double-count.
 //
+// Client sends synchronously; wrap it in an Async dispatcher (NewAsync)
+// when sends must never block the caller — calls then enqueue and return
+// immediately while a background goroutine delivers them in order.
+//
 // The package also retains the legacy SSO-token helper (MixDive,
 // CustomSSOToken) used by the Mixdive feedback platform; analytics
 // integrations use Client.
