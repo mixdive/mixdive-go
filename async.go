@@ -146,21 +146,33 @@ func (a *Async) enqueue(item asyncItem, what string) {
 func (a *Async) run() {
 	defer close(a.drained)
 	for item := range a.queue {
-		var err error
-		switch {
-		case item.event != nil:
-			if err = a.client.Track(context.Background(), *item.event); err != nil {
-				err = fmt.Errorf("mixdive: async send of event %q failed: %w", item.event.Key, err)
-			}
-		case item.user != nil:
-			if err = a.client.SetUser(context.Background(), *item.user); err != nil {
-				err = fmt.Errorf("mixdive: async send of user %q failed: %w", item.user.Id, err)
-			}
-		default:
-			err = errors.New("mixdive: internal: empty async item")
+		a.deliver(item)
+	}
+}
+
+// deliver sends one item, converting any panic into an error-handler report:
+// an unrecovered panic on this goroutine would crash the host process, and
+// analytics must never be able to do that.
+func (a *Async) deliver(item asyncItem) {
+	defer func() {
+		if r := recover(); r != nil {
+			a.onError(fmt.Errorf("mixdive: async delivery panicked: %v", r))
 		}
-		if err != nil {
-			a.onError(err)
+	}()
+	var err error
+	switch {
+	case item.event != nil:
+		if err = a.client.Track(context.Background(), *item.event); err != nil {
+			err = fmt.Errorf("mixdive: async send of event %q failed: %w", item.event.Key, err)
 		}
+	case item.user != nil:
+		if err = a.client.SetUser(context.Background(), *item.user); err != nil {
+			err = fmt.Errorf("mixdive: async send of user %q failed: %w", item.user.Id, err)
+		}
+	default:
+		err = errors.New("mixdive: internal: empty async item")
+	}
+	if err != nil {
+		a.onError(err)
 	}
 }
