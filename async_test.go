@@ -175,3 +175,36 @@ func TestAsyncCloseIsIdempotentAndRejectsLateItems(t *testing.T) {
 		t.Errorf("late Track must report a drop, got: %v", errs)
 	}
 }
+
+// A caller reusing one []Item buffer across Track calls must not have its
+// earlier sends rewritten by later ones — delivery happens later, on another
+// goroutine, so the slice has to be copied at enqueue time.
+func TestAsyncTrackCopiesTheCallersSlice(t *testing.T) {
+	cap := &capture{}
+	mux := http.NewServeMux()
+	mux.Handle("POST /ingest/event", cap.handler(http.StatusAccepted, `{"queued":1}`))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	a := NewAsync(New(srv.URL, "mx_testkey"))
+	buf := make([]Item, 1)
+	for _, key := range []string{"first", "second", "third"} {
+		buf[0] = Event{Key: key}
+		a.Track(buf...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	cap.mu.Lock()
+	defer cap.mu.Unlock()
+	if len(cap.bodies) != 3 {
+		t.Fatalf("expected 3 deliveries, got %d", len(cap.bodies))
+	}
+	for i, want := range []string{"first", "second", "third"} {
+		if got := cap.bodies[i]["event_key"]; got != want {
+			t.Errorf("delivery %d: got %v, want %q — the slice was aliased", i, got, want)
+		}
+	}
+}

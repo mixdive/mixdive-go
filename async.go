@@ -10,22 +10,25 @@ import (
 
 // Async wraps a Client so sends never block the caller: Track and SetUser
 // enqueue onto a bounded in-memory queue and return immediately, while a
-// single background goroutine delivers items in order using the wrapped
+// single background goroutine delivers calls in order using the wrapped
 // Client (including its retry policy). Analytics must never slow the host
-// application down — when the queue is full, the new item is dropped and
+// application down — when the queue is full, the new call is dropped and
 // reported to the error handler instead of applying back-pressure.
 //
-// Delivery is best-effort: items still queued when the process exits
-// without a successful Close are lost. Set Event.OccurrenceId to a value
-// derived from your own data (an entity id, for example) when the same
-// action may be enqueued more than once — the server deduplicates on it.
+// One Track call is queued as one unit, so the items of a moment are never
+// split apart and always reach the server together.
+//
+// Delivery is best-effort: calls still queued when the process exits
+// without a successful Close are lost. Set Event.Id to a value derived from
+// your own data (an entity id, for example) when the same action may be
+// enqueued more than once — the server deduplicates on it.
 //
 // All methods are no-ops on a nil *Async, so an uninitialized dispatcher
 // never sends anything and never panics — leave the pointer nil to keep
 // analytics off.
 type Async struct {
 	client  *Client
-	queue   chan asyncItem
+	queue   chan asyncSend
 	onError func(error)
 
 	mu      sync.Mutex
@@ -33,10 +36,13 @@ type Async struct {
 	drained chan struct{}
 }
 
-// asyncItem is one queued send; exactly one of event/user is set.
-type asyncItem struct {
-	event *Event
+// asyncSend is one queued call. items is a whole Track call — the facts of
+// one moment, which must stay together to be related; user is a standalone
+// SetUser, which has its own endpoint.
+type asyncSend struct {
+	items []Item
 	user  *User
+	what  string
 }
 
 // AsyncOption configures an Async dispatcher.
@@ -49,7 +55,7 @@ func WithQueueSize(n int) AsyncOption {
 		if n < 1 {
 			n = 1
 		}
-		a.queue = make(chan asyncItem, n)
+		a.queue = make(chan asyncSend, n)
 	}
 }
 
@@ -69,7 +75,7 @@ func WithErrorHandler(fn func(error)) AsyncOption {
 func NewAsync(c *Client, opts ...AsyncOption) *Async {
 	a := &Async{
 		client:  c,
-		queue:   make(chan asyncItem, 1024),
+		queue:   make(chan asyncSend, 1024),
 		onError: func(err error) { log.Printf("%v", err) },
 		drained: make(chan struct{}),
 	}
@@ -80,14 +86,19 @@ func NewAsync(c *Client, opts ...AsyncOption) *Async {
 	return a
 }
 
-// Track enqueues one event occurrence and returns immediately. If the
-// queue is full or the dispatcher is closed, the event is dropped and
+// Track enqueues the facts of one moment and returns immediately — the same
+// items Client.Track takes, delivered as one call so they stay related. If
+// the queue is full or the dispatcher is closed, the call is dropped and
 // reported to the error handler. On a nil receiver it does nothing.
-func (a *Async) Track(e Event) {
-	if a == nil {
+func (a *Async) Track(items ...Item) {
+	if a == nil || len(items) == 0 {
 		return
 	}
-	a.enqueue(asyncItem{event: &e}, fmt.Sprintf("event %q", e.Key))
+	// Copied, not aliased: delivery happens later on another goroutine, and
+	// a caller reusing its slice would otherwise send whatever the buffer
+	// holds by then — and race the dispatcher reading it.
+	queued := append([]Item(nil), items...)
+	a.enqueue(asyncSend{items: queued, what: describe(queued)})
 }
 
 // SetUser enqueues a user-profile update and returns immediately. If the
@@ -97,7 +108,27 @@ func (a *Async) SetUser(u User) {
 	if a == nil {
 		return
 	}
-	a.enqueue(asyncItem{user: &u}, fmt.Sprintf("user %q", u.Id))
+	a.enqueue(asyncSend{user: &u, what: fmt.Sprintf("user %q", u.Id)})
+}
+
+// describe names a queued call for the error handler: the first item, plus
+// how many others rode along.
+func describe(items []Item) string {
+	var head string
+	switch v := items[0].(type) {
+	case Event:
+		head = fmt.Sprintf("event %q", v.Key)
+	case Model:
+		head = fmt.Sprintf("record %q/%q", v.Key, v.Id)
+	case User:
+		head = fmt.Sprintf("user %q", v.Id)
+	default:
+		head = "item"
+	}
+	if len(items) > 1 {
+		return fmt.Sprintf("%s (+%d more)", head, len(items)-1)
+	}
+	return head
 }
 
 // Close stops accepting new items and waits for the queue to drain or ctx
@@ -123,16 +154,16 @@ func (a *Async) Close(ctx context.Context) error {
 	}
 }
 
-func (a *Async) enqueue(item asyncItem, what string) {
+func (a *Async) enqueue(send asyncSend) {
 	var dropErr error
 	a.mu.Lock()
 	if a.closing {
-		dropErr = fmt.Errorf("mixdive: async dispatcher closed, dropped %s", what)
+		dropErr = fmt.Errorf("mixdive: async dispatcher closed, dropped %s", send.what)
 	} else {
 		select {
-		case a.queue <- item:
+		case a.queue <- send:
 		default:
-			dropErr = fmt.Errorf("mixdive: async queue full, dropped %s", what)
+			dropErr = fmt.Errorf("mixdive: async queue full, dropped %s", send.what)
 		}
 	}
 	a.mu.Unlock()
@@ -141,19 +172,19 @@ func (a *Async) enqueue(item asyncItem, what string) {
 	}
 }
 
-// run is the dispatcher goroutine: it delivers queued items in order until
+// run is the dispatcher goroutine: it delivers queued calls in order until
 // Close closes the queue, then signals drained.
 func (a *Async) run() {
 	defer close(a.drained)
-	for item := range a.queue {
-		a.deliver(item)
+	for send := range a.queue {
+		a.deliver(send)
 	}
 }
 
-// deliver sends one item, converting any panic into an error-handler report:
+// deliver sends one call, converting any panic into an error-handler report:
 // an unrecovered panic on this goroutine would crash the host process, and
 // analytics must never be able to do that.
-func (a *Async) deliver(item asyncItem) {
+func (a *Async) deliver(send asyncSend) {
 	defer func() {
 		if r := recover(); r != nil {
 			a.onError(fmt.Errorf("mixdive: async delivery panicked: %v", r))
@@ -161,18 +192,14 @@ func (a *Async) deliver(item asyncItem) {
 	}()
 	var err error
 	switch {
-	case item.event != nil:
-		if err = a.client.Track(context.Background(), *item.event); err != nil {
-			err = fmt.Errorf("mixdive: async send of event %q failed: %w", item.event.Key, err)
-		}
-	case item.user != nil:
-		if err = a.client.SetUser(context.Background(), *item.user); err != nil {
-			err = fmt.Errorf("mixdive: async send of user %q failed: %w", item.user.Id, err)
-		}
+	case len(send.items) > 0:
+		err = a.client.Track(context.Background(), send.items...)
+	case send.user != nil:
+		err = a.client.SetUser(context.Background(), *send.user)
 	default:
-		err = errors.New("mixdive: internal: empty async item")
+		err = errors.New("mixdive: internal: empty async send")
 	}
 	if err != nil {
-		a.onError(err)
+		a.onError(fmt.Errorf("mixdive: async send of %s failed: %w", send.what, err))
 	}
 }

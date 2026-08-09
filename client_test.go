@@ -16,6 +16,7 @@ type capture struct {
 	mu     sync.Mutex
 	bodies []map[string]any
 	keys   []string // X-Api-Key per request
+	paths  []string // request path per request
 }
 
 func (c *capture) handler(status int, response string) http.HandlerFunc {
@@ -25,6 +26,7 @@ func (c *capture) handler(status int, response string) http.HandlerFunc {
 		c.mu.Lock()
 		c.bodies = append(c.bodies, body)
 		c.keys = append(c.keys, r.Header.Get("X-Api-Key"))
+		c.paths = append(c.paths, r.URL.Path)
 		c.mu.Unlock()
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(response))
@@ -59,15 +61,15 @@ func TestTrackSendsContractPayload(t *testing.T) {
 	if got["timestamp"] != "2026-08-05T14:03:22Z" {
 		t.Errorf("wrong timestamp: %v", got["timestamp"])
 	}
-	if id, _ := got["occurrence_id"].(string); id == "" {
-		t.Error("occurrence_id was not auto-generated")
+	if id, _ := got["id"].(string); id == "" {
+		t.Error("id was not auto-generated")
 	}
 	if cap.keys[0] != "mx_testkey" {
 		t.Errorf("wrong X-Api-Key: %q", cap.keys[0])
 	}
 }
 
-func TestTrackRetriesReuseOccurrenceId(t *testing.T) {
+func TestTrackRetriesReuseItemId(t *testing.T) {
 	cap := &capture{}
 	attempts := 0
 	mux := http.NewServeMux()
@@ -89,9 +91,9 @@ func TestTrackRetriesReuseOccurrenceId(t *testing.T) {
 	if len(cap.bodies) != 2 {
 		t.Fatalf("expected 2 attempts, got %d", len(cap.bodies))
 	}
-	first, second := cap.bodies[0]["occurrence_id"], cap.bodies[1]["occurrence_id"]
+	first, second := cap.bodies[0]["id"], cap.bodies[1]["id"]
 	if first == "" || first != second {
-		t.Errorf("retry must reuse the occurrence id: %v vs %v", first, second)
+		t.Errorf("retry must reuse the item id: %v vs %v", first, second)
 	}
 }
 
@@ -103,18 +105,21 @@ func TestTrackBatchEnvelope(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "mx_testkey")
-	err := client.TrackBatch(context.Background(), []Event{{Key: "a"}, {Key: "b"}})
+	err := client.TrackBatch(context.Background(), Items([]Event{{Key: "a"}, {Key: "b"}})...)
 	if err != nil {
 		t.Fatalf("TrackBatch: %v", err)
 	}
-	events, ok := cap.bodies[0]["events"].([]any)
-	if !ok || len(events) != 2 {
-		t.Fatalf("expected events array of 2, got %v", cap.bodies[0])
+	items, ok := cap.bodies[0]["items"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("expected items array of 2, got %v", cap.bodies[0])
 	}
-	for i, raw := range events {
+	for i, raw := range items {
 		e := raw.(map[string]any)
-		if id, _ := e["occurrence_id"].(string); id == "" {
-			t.Errorf("event %d missing occurrence_id", i)
+		if id, _ := e["id"].(string); id == "" {
+			t.Errorf("item %d missing id", i)
+		}
+		if e["event"] == nil {
+			t.Errorf("item %d missing event key", i)
 		}
 	}
 	if err := client.TrackBatch(context.Background(), nil); err != nil {

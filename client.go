@@ -34,8 +34,8 @@ func WithHTTPClient(h *http.Client) Option {
 
 // WithRetries sets how many times a call is retried after a retryable
 // failure — HTTP 503 or a transport error. Default 2; 0 disables retries.
-// Retrying is safe: every event carries an occurrence id the server
-// deduplicates on.
+// Retrying is safe: every event carries an id the server deduplicates on,
+// and record merges are idempotent by construction.
 func WithRetries(n int) Option {
 	return func(c *Client) {
 		if n < 0 {
@@ -129,9 +129,10 @@ func (c *Client) doOnce(ctx context.Context, path string, body []byte) error {
 	return &APIError{StatusCode: res.StatusCode, Message: e.Error}
 }
 
-// newOccurrenceId returns a random 32-hex-char idempotency id. crypto/rand
-// cannot fail on the Go versions this module supports.
-func newOccurrenceId() string {
+// newItemId returns a random 32-hex-char id, used when an item does not
+// carry one of its own. crypto/rand cannot fail on the Go versions this
+// module supports.
+func newItemId() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)

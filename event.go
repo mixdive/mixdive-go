@@ -12,15 +12,28 @@ import (
 type Event struct {
 	// Key is the unique, immutable event key ("checkout_completed").
 	Key string
-	// UserId ties the occurrence to a user. Ids are always supplied by
-	// your systems (typically UUIDs — Mixdive never generates them);
-	// empty means anonymous, counting toward event totals only.
-	UserId string
-	// OccurrenceId is this occurrence's idempotency id (max 128 chars).
-	// Leave empty and the SDK generates one per Track/TrackBatch call —
-	// set it yourself only when your own code re-sends events and needs
-	// dedup across those re-sends.
+	// Id is this occurrence's identity and its idempotency key (max 128
+	// chars). Leave it empty and the SDK generates one per call; set it
+	// from your own data when the same action may be sent more than once,
+	// and the server counts it exactly once however often it arrives.
+	Id string
+	// OccurrenceId is the former name of Id, still honoured. Id wins when
+	// both are set.
+	//
+	// Deprecated: set Id instead.
 	OccurrenceId string
+	// UserId ties the occurrence to one user in the default role "actor".
+	// Ids are always supplied by your systems (typically UUIDs — Mixdive
+	// never generates them); empty means anonymous, counting toward event
+	// totals only.
+	UserId string
+	// Users attaches further users with a role each — the liker and the
+	// author of the post they liked. Merges with UserId.
+	Users []RelatedUser
+	// Models are the records this occurrence concerns. A like names the
+	// post it was given to, which is what makes "likes this post received"
+	// a number.
+	Models []Ref
 	// Timestamp is when the event happened. Zero means the server's
 	// receive time.
 	Timestamp time.Time
@@ -30,29 +43,26 @@ type Event struct {
 	Properties map[string]any
 }
 
-// eventPayload is the wire shape (docs/ingest-api.md).
-type eventPayload struct {
-	EventKey     string         `json:"event_key"`
-	UserId       string         `json:"user_id,omitempty"`
-	OccurrenceId string         `json:"occurrence_id,omitempty"`
-	Timestamp    *time.Time     `json:"timestamp,omitempty"`
-	Properties   map[string]any `json:"properties,omitempty"`
-}
-
 var errNoEventKey = errors.New("mixdive: event Key is required")
 
-func (e Event) payload() (eventPayload, error) {
+func (e Event) item() (itemPayload, error) {
 	if e.Key == "" {
-		return eventPayload{}, errNoEventKey
+		return itemPayload{}, errNoEventKey
 	}
-	p := eventPayload{
-		EventKey:     e.Key,
-		UserId:       e.UserId,
-		OccurrenceId: e.OccurrenceId,
-		Properties:   e.Properties,
+	users, refs := relatedPayloads(e.Users, e.Models)
+	p := itemPayload{
+		Event:      e.Key,
+		Id:         e.Id,
+		UserId:     e.UserId,
+		Users:      users,
+		Models:     refs,
+		Properties: e.Properties,
 	}
-	if p.OccurrenceId == "" {
-		p.OccurrenceId = newOccurrenceId()
+	if p.Id == "" {
+		p.Id = e.OccurrenceId
+	}
+	if p.Id == "" {
+		p.Id = newItemId()
 	}
 	if !e.Timestamp.IsZero() {
 		ts := e.Timestamp.UTC()
@@ -61,34 +71,77 @@ func (e Event) payload() (eventPayload, error) {
 	return p, nil
 }
 
-// Track sends one event occurrence. A nil error means the server queued it
-// (fast-ack); built-in retries reuse the same occurrence id and never
-// double-count.
-func (c *Client) Track(ctx context.Context, e Event) error {
-	p, err := e.payload()
-	if err != nil {
-		return err
-	}
-	return c.post(ctx, "/ingest/event", p)
+// eventPayload is the /ingest/event wire shape, which keeps `event_key` as
+// its required field name.
+type eventPayload struct {
+	itemPayload
+	EventKey string `json:"event_key"`
 }
 
-// TrackBatch sends events in one request, preserving order. The whole
-// request shares the server's size cap (32 KB by default) — split large
-// batches. An empty slice is a no-op.
-func (c *Client) TrackBatch(ctx context.Context, events []Event) error {
-	if len(events) == 0 {
-		return nil
+// Track sends the facts of one moment in a single call: an event, the record
+// it concerns, the user profiles it changes — any mix, in any order.
+//
+//	client.Track(ctx,
+//	    mixdive.Event{Key: "post_created", Id: "post-created-p1", UserId: "u9"},
+//	    mixdive.Model{Key: "post", Id: "p1", Data: map[string]any{"kind": "photo"}})
+//
+// Items sent together are related to each other server-side, so neither has
+// to name the other. Use TrackBatch for unrelated items.
+//
+// A nil error means the server queued them (fast-ack); built-in retries
+// reuse the same ids and never double-count. An item that fails validation
+// fails the whole call before anything is sent. No items is a no-op.
+func (c *Client) Track(ctx context.Context, items ...Item) error {
+	payloads, err := itemPayloads(items)
+	if err != nil || payloads == nil {
+		return err
 	}
-	payloads := make([]eventPayload, len(events))
-	for i, e := range events {
-		p, err := e.payload()
-		if err != nil {
-			return err
+	// One item that is a plain event goes to the endpoint built for it:
+	// there is nothing for it to be related to, and older servers know it.
+	if len(payloads) == 1 && payloads[0].Event != "" {
+		return c.post(ctx, "/ingest/event", eventPayload{payloads[0], payloads[0].Event})
+	}
+	return c.post(ctx, "/ingest/track", struct {
+		Items []itemPayload `json:"items"`
+	}{payloads})
+}
+
+// TrackBatch sends many independent items in one request, preserving order.
+// Unlike Track, items in a batch are NOT related to one another — a batch is
+// many moments, not one.
+//
+// The whole request shares the server's size cap (32 KB by default) — split
+// large batches. No items is a no-op.
+//
+//	client.TrackBatch(ctx, mixdive.Items(events)...)
+func (c *Client) TrackBatch(ctx context.Context, items ...Item) error {
+	payloads, err := itemPayloads(items)
+	if err != nil || payloads == nil {
+		return err
+	}
+	return c.post(ctx, "/ingest/batch", struct {
+		Items []itemPayload `json:"items"`
+	}{payloads})
+}
+
+// itemPayloads converts every item up front, so a bad one fails the call
+// before any bytes leave the process. A nil result means there was nothing
+// to send: no items at all, or only nil ones — Track(ctx, nil) and a slice
+// of untyped nils are both no-ops rather than panics.
+func itemPayloads(items []Item) ([]itemPayload, error) {
+	out := make([]itemPayload, 0, len(items))
+	for _, it := range items {
+		if it == nil {
+			continue
 		}
-		payloads[i] = p
+		p, err := it.item()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
 	}
-	envelope := struct {
-		Events []eventPayload `json:"events"`
-	}{payloads}
-	return c.post(ctx, "/ingest/batch", envelope)
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
