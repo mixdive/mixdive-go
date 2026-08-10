@@ -40,6 +40,12 @@
 // event carries an id, so retries never double-count, and record merges are
 // idempotent by construction.
 //
+// Every call reports the client's app version in the X-App-Version header,
+// so Mixdive can break reports down by release. By default that is the host
+// binary's VCS revision (the commit it was built from, when the binary was
+// built inside a git checkout); WithAppVersion overrides it, and
+// WithAppVersion("") turns it off.
+//
 // Client sends synchronously; wrap it in an Async dispatcher (NewAsync)
 // when sends must never block the caller — calls then enqueue and return
 // immediately while a background goroutine delivers them in order.

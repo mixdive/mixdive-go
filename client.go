@@ -20,6 +20,7 @@ import (
 type Client struct {
 	serverUrl  string
 	apiKey     string
+	appVersion string
 	httpClient *http.Client
 	retries    int
 }
@@ -45,13 +46,27 @@ func WithRetries(n int) Option {
 	}
 }
 
+// WithAppVersion sets the app version reported in the X-App-Version header
+// on every ingest call, which Mixdive stamps on each occurrence and breaks
+// reports down by. When this option is not used, the client defaults to the
+// host binary's VCS revision (the commit it was built from, when available).
+// Pass "" to send no version at all.
+func WithAppVersion(v string) Option {
+	return func(c *Client) { c.appVersion = v }
+}
+
 // New creates a Client. serverUrl is the base URL of your Mixdive server
 // (for example "https://analytics.example.com"); apiKey is an app API key
 // created under Settings → Apps.
+//
+// Unless WithAppVersion overrides it, the client reports the host binary's
+// VCS revision as the app version — so reports can break usage down by the
+// commit that produced it, with zero configuration.
 func New(serverUrl, apiKey string, opts ...Option) *Client {
 	c := &Client{
 		serverUrl:  strings.TrimRight(serverUrl, "/"),
 		apiKey:     apiKey,
+		appVersion: detectAppVersion(),
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		retries:    2,
 	}
@@ -113,6 +128,9 @@ func (c *Client) doOnce(ctx context.Context, path string, body []byte) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Api-Key", c.apiKey)
+	if c.appVersion != "" {
+		req.Header.Set("X-App-Version", c.appVersion)
+	}
 	res, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("mixdive: %w", err)
