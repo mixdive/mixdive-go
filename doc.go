@@ -44,7 +44,8 @@
 // when sends must never block the caller — calls then enqueue and return
 // immediately while a background goroutine delivers them in order.
 //
-// The package also retains the legacy SSO-token helper (MixDive,
-// CustomSSOToken) used by the Mixdive feedback platform; analytics
-// integrations use Client.
+// This package is the analytics SDK only. The Mixdive feedback platform is
+// a separate product with its own SDK, package mixdivefeedback in
+// github.com/mixdive/mixdive-feedback-go — the two are independent and can
+// be used side by side.
 package mixdive

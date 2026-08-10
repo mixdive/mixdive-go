@@ -7,6 +7,10 @@ analytics. Send an event, get its report screen automatically.
 go get github.com/mixdive/mixdive-go
 ```
 
+> Looking for the Mixdive **feedback platform**? That's a separate product
+> with its own SDK: [`github.com/mixdive/mixdive-feedback-go`](https://github.com/mixdive/mixdive-feedback-go).
+> The two are independent and can be used side by side.
+
 ## Quick start
 
 Create an app under **Settings → Apps** in your Mixdive panel to get an API
@@ -180,11 +184,24 @@ client := mixdive.New(serverUrl, apiKey,
 `Track` and `TrackBatch` became variadic over `Item`. `client.Track(ctx, event)`
 still compiles unchanged; `client.TrackBatch(ctx, []mixdive.Event{...})`
 becomes `client.TrackBatch(ctx, mixdive.Items(events)...)`. `Event.OccurrenceId`
-is deprecated in favour of `Event.Id` and still honoured. The legacy SSO
-helper below is untouched.
+is deprecated in favour of `Event.Id` and still honoured.
 
-## Legacy: feedback-platform SSO helper
+## Moved out: the feedback-platform SSO helper
 
-Earlier versions of this module shipped only an SSO-token helper for the
-Mixdive feedback platform. It is unchanged and stays available:
-`mixdive.NewMixDive(serverUrl, ssoSecret).CustomSSOToken(...)`.
+Earlier versions of this module also shipped an SSO-token helper for the
+Mixdive feedback platform (`MixDive`, `NewMixDive`, `CustomSSOToken`). It
+now lives in its own module, so the analytics SDK carries no dependencies:
+
+```go
+// before
+mxd := mixdive.NewMixDive(portalUrl, ssoSecret)
+
+// after — go get github.com/mixdive/mixdive-feedback-go
+mxd := mixdivefeedback.New(portalUrl, ssoSecret)
+```
+
+`CustomSSOToken` and the tokens it mints are unchanged.
+
+## License
+
+Apache-2.0.
