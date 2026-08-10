@@ -179,7 +179,7 @@ client := mixdive.New(serverUrl, apiKey,
 )
 ```
 
-## Upgrading from the first analytics release
+## Upgrading from the first release
 
 `Track` and `TrackBatch` became variadic over `Item`. `client.Track(ctx, event)`
 still compiles unchanged; `client.TrackBatch(ctx, []mixdive.Event{...})`
@@ -190,7 +190,7 @@ is deprecated in favour of `Event.Id` and still honoured.
 
 Earlier versions of this module also shipped an SSO-token helper for the
 Mixdive feedback platform (`MixDive`, `NewMixDive`, `CustomSSOToken`). It
-now lives in its own module, so the analytics SDK carries no dependencies:
+now lives in its own module, so this SDK carries no dependencies at all:
 
 ```go
 // before

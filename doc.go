@@ -44,8 +44,8 @@
 // when sends must never block the caller — calls then enqueue and return
 // immediately while a background goroutine delivers them in order.
 //
-// This package is the analytics SDK only. The Mixdive feedback platform is
-// a separate product with its own SDK, package mixdivefeedback in
+// This is the SDK for Mixdive itself. Mixdive's feedback platform is a
+// separate product with its own SDK, package mixdivefeedback in
 // github.com/mixdive/mixdive-feedback-go — the two are independent and can
 // be used side by side.
 package mixdive
