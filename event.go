@@ -6,66 +6,149 @@ import (
 	"time"
 )
 
-// Event is one event occurrence. Key is required; everything else is
-// optional. Unknown keys auto-register server-side on first receipt — there
-// are no schemas to define up front.
+// Event is one event occurrence. Start it with NewEvent and complete it
+// with setters; the zero value is unusable on purpose — the wire shape is
+// the SDK's concern, not the caller's.
 type Event struct {
-	// Key is the unique, immutable event key ("checkout_completed").
-	Key string
-	// Id is this occurrence's identity and its idempotency key (max 128
-	// chars). Leave it empty and the SDK generates one per call; set it
-	// from your own data when the same action may be sent more than once,
-	// and the server counts it exactly once however often it arrives.
-	Id string
-	// OccurrenceId is the former name of Id, still honoured. Id wins when
-	// both are set.
-	//
-	// Deprecated: set Id instead.
-	OccurrenceId string
-	// UserId ties the occurrence to one user in the default role "actor".
-	// Ids are always supplied by your systems (typically UUIDs — Mixdive
-	// never generates them); empty means anonymous, counting toward event
-	// totals only.
-	UserId string
-	// Users attaches further users with a role each — the liker and the
-	// author of the post they liked. Merges with UserId.
-	Users []RelatedUser
-	// Models are the records this occurrence concerns. A like names the
-	// post it was given to, which is what makes "likes this post received"
-	// a number.
-	Models []Ref
-	// Timestamp is when the event happened. Zero means the server's
-	// receive time.
-	Timestamp time.Time
-	// Properties is freeform JSON: string, number, boolean, or object
-	// values with objects nested at most 2 levels; arrays and deeper
-	// nesting are dropped server-side.
-	Properties map[string]any
+	key        string
+	id         string
+	userId     string
+	users      []userPayload
+	models     []refPayload
+	timestamp  time.Time
+	properties map[string]any
 }
 
-var errNoEventKey = errors.New("mixdive: event Key is required")
+// NewEvent starts an occurrence of the event key — unique, immutable,
+// auto-registering server-side on first receipt ("checkout_completed").
+// Everything else is optional and added with setters, each returning the
+// event for chaining:
+//
+//	client.Track(ctx, mixdive.NewEvent("post_liked").
+//	    SetId("like-u9-p1").
+//	    SetUser("u9").
+//	    SetRelation("post", "p1"))
+//
+// An event is not safe for concurrent use and must not be modified after
+// it is handed to Track.
+func NewEvent(key string) *Event {
+	return &Event{key: key}
+}
 
-func (e Event) item() (itemPayload, error) {
-	if e.Key == "" {
+// SetId sets this occurrence's identity and its idempotency key (max 128
+// chars). Unset, the SDK generates one per call; set it from your own data
+// when the same action may be sent more than once, and the server counts
+// it exactly once however often it arrives.
+func (e *Event) SetId(id string) *Event {
+	e.id = id
+	return e
+}
+
+// SetUser ties the occurrence to the user who did it — one user in the
+// default role "actor". Ids are always supplied by your systems (typically
+// UUIDs — Mixdive never generates them); without one the occurrence is
+// anonymous, counting toward event totals only.
+func (e *Event) SetUser(userId string) *Event {
+	e.userId = userId
+	return e
+}
+
+// AddUser attaches a further user, with the role saying why they are on
+// the event: the author of the post that was liked is role "owner". An
+// empty role means the default "actor" — the one who did it; roles are
+// free text and auto-register. The role is what makes "likes I gave" and
+// "likes I received" two different numbers on one user's page. An empty
+// userId is ignored.
+func (e *Event) AddUser(userId, role string) *Event {
+	if userId != "" {
+		e.users = append(e.users, userPayload{Id: userId, Role: role})
+	}
+	return e
+}
+
+// SetRelation relates the occurrence to a record it concerns: the post a
+// like was given to, which is what makes "likes this post received" a
+// number. Call it once per related record. Relating a record that does not
+// exist yet creates it, so relations never have to wait for anything. An
+// empty model or id is ignored.
+func (e *Event) SetRelation(model, id string) *Event {
+	if model != "" && id != "" {
+		e.models = append(e.models, refPayload{Model: model, Id: id})
+	}
+	return e
+}
+
+// SetTimestamp sets when the event happened. Unset, the server's receive
+// time counts.
+func (e *Event) SetTimestamp(t time.Time) *Event {
+	e.timestamp = t
+	return e
+}
+
+// SetPropertyString adds one string property.
+func (e *Event) SetPropertyString(key, value string) *Event {
+	return e.setProperty(key, value)
+}
+
+// SetPropertyInt adds one integer property.
+func (e *Event) SetPropertyInt(key string, value int) *Event {
+	return e.setProperty(key, value)
+}
+
+// SetPropertyFloat adds one float property.
+func (e *Event) SetPropertyFloat(key string, value float64) *Event {
+	return e.setProperty(key, value)
+}
+
+// SetPropertyBool adds one boolean property.
+func (e *Event) SetPropertyBool(key string, value bool) *Event {
+	return e.setProperty(key, value)
+}
+
+// SetPropertyTimestamp adds one point-in-time property, sent as RFC 3339
+// in UTC.
+func (e *Event) SetPropertyTimestamp(key string, value time.Time) *Event {
+	return e.setProperty(key, value.UTC().Format(time.RFC3339))
+}
+
+// SetPropertyAny adds one property of any JSON-encodable shape: string,
+// number, boolean, or object nested at most 2 levels — arrays and deeper
+// nesting are dropped server-side. The typed setters are this method with
+// the type spelled out; reach for this one for objects.
+func (e *Event) SetPropertyAny(key string, value any) *Event {
+	return e.setProperty(key, value)
+}
+
+func (e *Event) setProperty(key string, value any) *Event {
+	if e.properties == nil {
+		e.properties = map[string]any{}
+	}
+	e.properties[key] = value
+	return e
+}
+
+var errNoEventKey = errors.New("mixdive: event key is required")
+
+func (e *Event) item() (itemPayload, error) {
+	if e == nil {
+		return itemPayload{}, errNilItem
+	}
+	if e.key == "" {
 		return itemPayload{}, errNoEventKey
 	}
-	users, refs := relatedPayloads(e.Users, e.Models)
 	p := itemPayload{
-		Event:      e.Key,
-		Id:         e.Id,
-		UserId:     e.UserId,
-		Users:      users,
-		Models:     refs,
-		Properties: e.Properties,
-	}
-	if p.Id == "" {
-		p.Id = e.OccurrenceId
+		Event:      e.key,
+		Id:         e.id,
+		UserId:     e.userId,
+		Users:      e.users,
+		Models:     e.models,
+		Properties: e.properties,
 	}
 	if p.Id == "" {
 		p.Id = newItemId()
 	}
-	if !e.Timestamp.IsZero() {
-		ts := e.Timestamp.UTC()
+	if !e.timestamp.IsZero() {
+		ts := e.timestamp.UTC()
 		p.Timestamp = &ts
 	}
 	return p, nil
@@ -82,8 +165,8 @@ type eventPayload struct {
 // it concerns, the user profiles it changes — any mix, in any order.
 //
 //	client.Track(ctx,
-//	    mixdive.Event{Key: "post_created", Id: "post-created-p1", UserId: "u9"},
-//	    mixdive.Model{Key: "post", Id: "p1", Data: map[string]any{"kind": "photo"}})
+//	    mixdive.NewEvent("post_created").SetId("post-created-p1").SetUser("u9"),
+//	    mixdive.NewModel("post", "p1").SetDataString("kind", "photo"))
 //
 // Items sent together are related to each other server-side, so neither has
 // to name the other. Use TrackBatch for unrelated items.
@@ -96,8 +179,13 @@ func (c *Client) Track(ctx context.Context, items ...Item) error {
 	if err != nil || payloads == nil {
 		return err
 	}
-	// One item that is a plain event goes to the endpoint built for it:
-	// there is nothing for it to be related to, and older servers know it.
+	return c.trackPayloads(ctx, payloads)
+}
+
+// trackPayloads routes converted items. One item that is a plain event goes
+// to the endpoint built for it: there is nothing for it to be related to,
+// and older servers know it. Everything else travels as a track envelope.
+func (c *Client) trackPayloads(ctx context.Context, payloads []itemPayload) error {
 	if len(payloads) == 1 && payloads[0].Event != "" {
 		return c.post(ctx, "/ingest/event", eventPayload{payloads[0], payloads[0].Event})
 	}
@@ -126,8 +214,9 @@ func (c *Client) TrackBatch(ctx context.Context, items ...Item) error {
 
 // itemPayloads converts every item up front, so a bad one fails the call
 // before any bytes leave the process. A nil result means there was nothing
-// to send: no items at all, or only nil ones — Track(ctx, nil) and a slice
-// of untyped nils are both no-ops rather than panics.
+// to send: no items at all, or only nil ones — Track(ctx, nil) is a no-op
+// rather than a panic. A typed nil pointer, though, is an error: it means
+// a call site built an item and lost it.
 func itemPayloads(items []Item) ([]itemPayload, error) {
 	out := make([]itemPayload, 0, len(items))
 	for _, it := range items {

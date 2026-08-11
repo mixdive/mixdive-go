@@ -19,9 +19,9 @@ func TestAsyncDeliversInOrderAndDrains(t *testing.T) {
 	defer srv.Close()
 
 	a := NewAsync(New(srv.URL, "mx_testkey"))
-	a.Track(Event{Key: "first"})
-	a.SetUser(User{Id: "user-1", Username: "ada"})
-	a.Track(Event{Key: "second"})
+	a.Track(NewEvent("first"))
+	a.SetUser(SetUser("user-1").SetUsername("ada"))
+	a.Track(NewEvent("second"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -54,7 +54,7 @@ func TestAsyncTrackDoesNotBlockOnSlowServer(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 50; i++ {
-			a.Track(Event{Key: "burst"})
+			a.Track(NewEvent("burst"))
 		}
 		close(done)
 	}()
@@ -86,7 +86,7 @@ func TestAsyncQueueFullDropsAndReports(t *testing.T) {
 
 	// One item may be in-flight and one queued; the rest must drop.
 	for i := 0; i < 10; i++ {
-		a.Track(Event{Key: "burst"})
+		a.Track(NewEvent("burst"))
 	}
 
 	mu.Lock()
@@ -116,8 +116,8 @@ func TestAsyncReportsDeliveryFailures(t *testing.T) {
 			errs = append(errs, err)
 			mu.Unlock()
 		}))
-	a.Track(Event{Key: "app_opened"})
-	a.SetUser(User{}) // invalid: missing id — must be reported, not panic
+	a.Track(NewEvent("app_opened"))
+	a.SetUser(SetUser("")) // invalid: missing id — reported at enqueue, not a panic
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -128,17 +128,20 @@ func TestAsyncReportsDeliveryFailures(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(errs) != 2 {
-		t.Fatalf("expected 2 delivery errors, got %d: %v", len(errs), errs)
+		t.Fatalf("expected 2 reported errors, got %d: %v", len(errs), errs)
 	}
-	if !strings.Contains(errs[0].Error(), "401") {
-		t.Errorf("expected 401 in first error, got: %v", errs[0])
+	// The 401 arrives on the dispatcher goroutine, the invalid update on the
+	// calling one — both must be reported, in whichever order they landed.
+	all := errs[0].Error() + " | " + errs[1].Error()
+	if !strings.Contains(all, "401") || !strings.Contains(all, "user id is required") {
+		t.Errorf("expected a 401 delivery failure and an invalid-user drop, got: %v", errs)
 	}
 }
 
 func TestNilAsyncIsInertNoOp(t *testing.T) {
 	var a *Async
-	a.Track(Event{Key: "app_opened"}) // must not panic or send
-	a.SetUser(User{Id: "user-1"})
+	a.Track(NewEvent("app_opened")) // must not panic or send
+	a.SetUser(SetUser("user-1"))
 	if err := a.Close(context.Background()); err != nil {
 		t.Errorf("nil Close must return nil, got %v", err)
 	}
@@ -168,7 +171,7 @@ func TestAsyncCloseIsIdempotentAndRejectsLateItems(t *testing.T) {
 		t.Fatalf("second Close: %v", err)
 	}
 
-	a.Track(Event{Key: "late"})
+	a.Track(NewEvent("late"))
 	mu.Lock()
 	defer mu.Unlock()
 	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "closed") {
@@ -178,7 +181,7 @@ func TestAsyncCloseIsIdempotentAndRejectsLateItems(t *testing.T) {
 
 // A caller reusing one []Item buffer across Track calls must not have its
 // earlier sends rewritten by later ones — delivery happens later, on another
-// goroutine, so the slice has to be copied at enqueue time.
+// goroutine, so the call is rendered to its wire shape at enqueue time.
 func TestAsyncTrackCopiesTheCallersSlice(t *testing.T) {
 	cap := &capture{}
 	mux := http.NewServeMux()
@@ -189,7 +192,7 @@ func TestAsyncTrackCopiesTheCallersSlice(t *testing.T) {
 	a := NewAsync(New(srv.URL, "mx_testkey"))
 	buf := make([]Item, 1)
 	for _, key := range []string{"first", "second", "third"} {
-		buf[0] = Event{Key: key}
+		buf[0] = NewEvent(key)
 		a.Track(buf...)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

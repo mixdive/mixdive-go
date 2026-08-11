@@ -42,12 +42,10 @@ func TestTrackSendsContractPayload(t *testing.T) {
 
 	client := New(srv.URL+"/", "mx_testkey") // trailing slash must not break the URL
 	ts := time.Date(2026, 8, 5, 14, 3, 22, 0, time.UTC)
-	err := client.Track(context.Background(), Event{
-		Key:        "checkout_completed",
-		UserId:     "user-1",
-		Timestamp:  ts,
-		Properties: map[string]any{"plan": "team"},
-	})
+	err := client.Track(context.Background(), NewEvent("checkout_completed").
+		SetUser("user-1").
+		SetTimestamp(ts).
+		SetPropertyString("plan", "team"))
 	if err != nil {
 		t.Fatalf("Track: %v", err)
 	}
@@ -85,7 +83,7 @@ func TestTrackRetriesReuseItemId(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "mx_testkey", WithRetries(2))
-	if err := client.Track(context.Background(), Event{Key: "app_opened"}); err != nil {
+	if err := client.Track(context.Background(), NewEvent("app_opened")); err != nil {
 		t.Fatalf("Track after retry: %v", err)
 	}
 	if len(cap.bodies) != 2 {
@@ -105,7 +103,7 @@ func TestTrackBatchEnvelope(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "mx_testkey")
-	err := client.TrackBatch(context.Background(), Items([]Event{{Key: "a"}, {Key: "b"}})...)
+	err := client.TrackBatch(context.Background(), Items([]*Event{NewEvent("a"), NewEvent("b")})...)
 	if err != nil {
 		t.Fatalf("TrackBatch: %v", err)
 	}
@@ -135,11 +133,9 @@ func TestSetUserOmitsEmptyFields(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "mx_testkey")
-	err := client.SetUser(context.Background(), User{
-		Id:     "user-1",
-		Name:   "Ada Lovelace",
-		Custom: map[string]any{"plan": "team"},
-	})
+	err := client.SetUser(context.Background(), SetUser("user-1").
+		SetName("Ada Lovelace").
+		SetDataString("plan", "team"))
 	if err != nil {
 		t.Fatalf("SetUser: %v", err)
 	}
@@ -162,7 +158,7 @@ func TestPermanentAPIErrorIsNotRetried(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "mx_wrong", WithRetries(3))
-	err := client.Track(context.Background(), Event{Key: "app_opened"})
+	err := client.Track(context.Background(), NewEvent("app_opened"))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401 APIError, got %v", err)
@@ -177,10 +173,10 @@ func TestPermanentAPIErrorIsNotRetried(t *testing.T) {
 
 func TestValidationBeforeNetwork(t *testing.T) {
 	client := New("http://127.0.0.1:1", "mx_testkey", WithRetries(0))
-	if err := client.Track(context.Background(), Event{}); !errors.Is(err, errNoEventKey) {
+	if err := client.Track(context.Background(), NewEvent("")); !errors.Is(err, errNoEventKey) {
 		t.Errorf("expected errNoEventKey, got %v", err)
 	}
-	if err := client.SetUser(context.Background(), User{}); !errors.Is(err, errNoUserId) {
+	if err := client.SetUser(context.Background(), SetUser("")); !errors.Is(err, errNoUserId) {
 		t.Errorf("expected errNoUserId, got %v", err)
 	}
 }

@@ -24,11 +24,11 @@ func TestAppVersionHeader(t *testing.T) {
 	defer srv.Close()
 
 	with := New(srv.URL, "mx_k", WithAppVersion("abc1234"))
-	if err := with.Track(context.Background(), Event{Key: "e"}); err != nil {
+	if err := with.Track(context.Background(), NewEvent("e")); err != nil {
 		t.Fatalf("track: %v", err)
 	}
 	without := New(srv.URL, "mx_k", WithAppVersion(""))
-	if err := without.Track(context.Background(), Event{Key: "e"}); err != nil {
+	if err := without.Track(context.Background(), NewEvent("e")); err != nil {
 		t.Fatalf("track: %v", err)
 	}
 	if len(got) != 2 || got[0] != "abc1234" || got[1] != "<absent>" {

@@ -31,92 +31,135 @@ func main() {
 	ctx := context.Background()
 
 	// Send an event. Unknown keys auto-register on first receipt —
-	// no schema setup needed.
-	_ = client.Track(ctx, mixdive.Event{
-		Key:        "checkout_completed",
-		UserId:     "9f1c53de-6f0e-4a0b-9f2a-1c53de6f0e4a",
-		Properties: map[string]any{"plan": "team", "seats": 4},
-	})
+	// no schema setup needed. Every item starts with its constructor and
+	// is completed with chainable setters.
+	_ = client.Track(ctx, mixdive.NewEvent("checkout_completed").
+		SetUser("9f1c53de-6f0e-4a0b-9f2a-1c53de6f0e4a").
+		SetPropertyString("plan", "team").
+		SetPropertyInt("seats", 4))
 
 	// Send the event AND the record it concerns, together. Items in one
 	// Track call are related to each other server-side, so post p1's
 	// screen shows this occurrence without either item naming the other.
 	_ = client.Track(ctx,
-		mixdive.Event{Key: "post_created", Id: "post-created-p1", UserId: "u9"},
-		mixdive.Model{Key: "post", Id: "p1", Data: map[string]any{"kind": "photo"}},
+		mixdive.NewEvent("post_created").SetId("post-created-p1").SetUser("u9"),
+		mixdive.NewModel("post", "p1").SetDataString("kind", "photo"),
 	)
 
 	// Set who that user is. Merge semantics: send only what changed.
-	_ = client.SetUser(ctx, mixdive.User{
-		Id:    "9f1c53de-6f0e-4a0b-9f2a-1c53de6f0e4a",
-		Name:  "Ada Lovelace",
-		Email: "ada@example.com",
-	})
+	// SetUser, not NewUser — you never have to know whether Mixdive has
+	// seen this user before.
+	_ = client.SetUser(ctx, mixdive.SetUser("9f1c53de-6f0e-4a0b-9f2a-1c53de6f0e4a").
+		SetName("Ada Lovelace").
+		SetEmail("ada@example.com"))
 
 	// Or batch unrelated items in one request (order preserved, no
 	// relations created between them).
-	_ = client.TrackBatch(ctx, mixdive.Items([]mixdive.Event{
-		{Key: "app_opened"},
-		{Key: "search_run", Timestamp: time.Now()},
+	_ = client.TrackBatch(ctx, mixdive.Items([]*mixdive.Event{
+		mixdive.NewEvent("app_opened"),
+		mixdive.NewEvent("search_run").SetTimestamp(time.Now()),
 	})...)
 }
 ```
 
 ## Events, records and users
 
-`Track` takes any mix of three item types:
+`Track` takes any mix of three item types, each started by its constructor
+and completed with setters:
 
-| Type | Means | Id |
+| Constructor | Means | Id |
 |---|---|---|
-| `Event` | something happened | the occurrence id — generated if you leave it empty |
-| `Model` | a record of a thing you track (`post` p1) | your own id; the server names it if omitted |
-| `User` | a profile — the one built-in model | required; Mixdive never invents a user id |
+| `NewEvent(key)` | something happened | `SetId` — the occurrence id, generated if you never set it |
+| `NewModel(key, id)` | a record of a thing you track (`post` p1) | required at construction — your own id, the one your database uses |
+| `SetUser(id)` | a profile — the one built-in model | required at construction; Mixdive never invents a user id |
+
+Fields go on with typed setters — `SetPropertyString`, `SetPropertyInt`,
+`SetPropertyFloat`, `SetPropertyBool`, `SetPropertyTimestamp` (takes a
+`time.Time`), and `SetPropertyAny` for objects — with the same family named
+`SetData…` on records and profiles.
 
 Model keys, event keys and roles all auto-register on first receipt. There is
 nothing to define up front and no schema to keep in sync.
 
-### Several users, with roles
+### Built-in events
 
-An item can relate to more than one user, and the role says why. `UserId` is
-shorthand for one user in the default role `actor` — the one who did it.
-Anything else reads as "this was done to them".
+Like the built-in `user` model, some events are defined at the Mixdive
+level — every project has them out of the box, named in the panel before
+their first occurrence. They follow [GA4's recommended
+events](https://developers.google.com/analytics/devguides/collection/ga4/reference/events),
+and each has a constructor that pre-fills the key and takes the event's
+recommended `method` parameter:
 
 ```go
-_ = client.Track(ctx, mixdive.Event{
-	Key:    "post_liked",
-	Id:     "like-u9-p1", // unique per like, not the post id
-	Users:  []mixdive.RelatedUser{{Id: "u9"}, {Id: "u_author", Role: "owner"}},
-	Models: []mixdive.Ref{{Model: "post", Id: "p1"}},
-})
+_ = client.Track(ctx, mixdive.Login("google").SetUser(userId))
+_ = client.Track(ctx,
+	mixdive.SignUp("email").SetId("sign-up-"+userId).SetUser(userId),
+	mixdive.SetUser(userId).SetName(name))
+```
+
+They return an ordinary `*Event`, so every event setter chains as usual.
+
+### Several users, with roles
+
+An item can relate to more than one user, and the role says why. `SetUser`
+is shorthand for one user in the default role `actor` — the one who did it.
+`AddUser` attaches the others; any role but `actor` reads as "this was done
+to them".
+
+```go
+_ = client.Track(ctx, mixdive.NewEvent("post_liked").
+	SetId("like-u9-p1"). // unique per like, not the post id
+	SetUser("u9").
+	AddUser("u_author", "owner").
+	SetRelation("post", "p1"))
 ```
 
 That one call answers three questions in the panel: how many likes `u9` gave
 (their `actor` counter), how many `u_author` received (their `owner` counter),
 and how many post `p1` received (the post's own counter).
 
-`Models` names records the event *touches* but does not describe. Referencing
-a record that does not exist yet creates it — empty, with counters — and it
-fills in whenever its data arrives, in any order.
+`SetRelation` names records the event *touches* but does not describe (call
+it once per record). Relating a record that does not exist yet creates it —
+empty, with counters — and it fills in whenever its data arrives, in any
+order.
 
 ### Profile changes that belong to an event
 
-A `User` is an item too, so a change caused by an event travels with it:
+A user profile is an item too, so a change caused by an event travels with it:
 
 ```go
 _ = client.Track(ctx,
-	mixdive.Event{Key: "user_followed", Id: "f-a-b", UserId: "a",
-		Users: []mixdive.RelatedUser{{Id: "b", Role: "target"}}},
-	mixdive.User{Id: "a", Custom: map[string]any{"following_count": 12}},
-	mixdive.User{Id: "b", Custom: map[string]any{"follower_count": 44}},
+	mixdive.NewEvent("user_followed").SetId("f-a-b").SetUser("a").AddUser("b", "target"),
+	mixdive.SetUser("a").SetDataInt("following_count", 12),
+	mixdive.SetUser("b").SetDataInt("follower_count", 44),
 )
 ```
+
+### Increments
+
+When you don't know a field's current value, add to it instead of setting
+it — the server does the arithmetic:
+
+```go
+_ = client.Track(ctx,
+	mixdive.NewEvent("post_viewed").SetUser("u9").SetRelation("post", "p1"),
+	mixdive.NewModel("post", "p1").IncrementData("view_count", 1),
+)
+```
+
+Each send carries a generated increment id the server deduplicates on, so
+the SDK's built-in HTTP retries never double-apply. Two separate `Track`
+calls are two increments, though — if your pipeline can replay the same
+action (a task queue redelivering), prefer the idempotent absolute set
+(`SetDataInt`). Incrementing a field that currently holds a non-number
+fails that item server-side.
 
 ## Semantics worth knowing
 
 - **Fast-ack:** a nil error means the server *queued* the data (HTTP 202).
   Reports typically reflect it within a minute.
-- **Safe retries:** every event carries an `id` (auto-generated unless you
-  set `Event.Id` yourself). The server deduplicates on it, so the SDK's
+- **Safe retries:** every event carries an id (auto-generated unless you
+  call `SetId` yourself). The server deduplicates on it, so the SDK's
   built-in retries — and your own re-sends with a fixed id — never
   double-count. Re-sending a record with a known id merges into it rather
   than creating a second one.
@@ -126,7 +169,8 @@ _ = client.Track(ctx,
   retries, doubling backoff from 200 ms); any other non-2xx returns an
   `*APIError` immediately.
 - **User ids are yours:** Mixdive never generates user ids — pass the same
-  client-supplied id (typically a UUID) to `Event.UserId` and `User.Id`.
+  client-supplied id (typically a UUID) to an event's `SetUser` and to the
+  `SetUser` profile constructor.
 - **Size cap:** requests over the server's limit (32 KB by default) are
   rejected — split large batches.
 
@@ -148,12 +192,12 @@ analytics := mixdive.NewAsync(client,
 
 // Fire-and-forget — returns immediately, never blocks. One Track call is
 // queued as one unit, so a moment's items are never split apart.
-analytics.Track(mixdive.Event{Key: "checkout_completed", UserId: userId})
+analytics.Track(mixdive.NewEvent("checkout_completed").SetUser(userId))
 analytics.Track(
-	mixdive.Event{Key: "post_created", Id: postId, UserId: userId},
-	mixdive.Model{Key: "post", Id: postId, Data: map[string]any{"kind": "photo"}},
+	mixdive.NewEvent("post_created").SetId("post-created-"+postId).SetUser(userId),
+	mixdive.NewModel("post", postId).SetDataString("kind", "photo"),
 )
-analytics.SetUser(mixdive.User{Id: userId, Username: "ada"})
+analytics.SetUser(mixdive.SetUser(userId).SetUsername("ada"))
 
 // On shutdown, flush what's still queued (bounded by the context).
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -163,8 +207,8 @@ _ = analytics.Close(ctx)
 
 Delivery is best-effort: items still queued when the process exits without
 a successful `Close` are lost. If the same action can be enqueued more than
-once (a task retry, for example), set `Event.Id` to a value derived from
-your own data — the server deduplicates on it.
+once (a task retry, for example), give the event an id derived from your
+own data with `SetId` — the server deduplicates on it.
 
 All methods are safe no-ops on a nil `*Async`, so gating analytics is just
 not constructing it: leave the pointer nil (e.g. outside the environments
@@ -179,12 +223,37 @@ client := mixdive.New(serverUrl, apiKey,
 )
 ```
 
-## Upgrading from the first release
+## Upgrading from the struct-literal API
 
-`Track` and `TrackBatch` became variadic over `Item`. `client.Track(ctx, event)`
-still compiles unchanged; `client.TrackBatch(ctx, []mixdive.Event{...})`
-becomes `client.TrackBatch(ctx, mixdive.Items(events)...)`. `Event.OccurrenceId`
-is deprecated in favour of `Event.Id` and still honoured.
+Items are now built with constructors and setters; the struct fields are no
+longer exported, so the wire shape stays the SDK's concern. Mechanical
+translation, nothing else changed:
+
+```go
+// before
+client.Track(ctx, mixdive.Event{
+	Key:        "post_created",
+	Id:         "post-created-p1",
+	UserId:     "u9",
+	Models:     []mixdive.Ref{{Model: "post", Id: "p1"}},
+	Properties: map[string]any{"kind": "photo"},
+})
+
+// after
+client.Track(ctx, mixdive.NewEvent("post_created").
+	SetId("post-created-p1").
+	SetUser("u9").
+	SetRelation("post", "p1").
+	SetPropertyString("kind", "photo"))
+```
+
+Records become `NewModel(key, id)` — both halves required — with
+`SetDataString`/`SetDataInt`/… instead of a `Data` map; profiles become
+`SetUser(id)` with `SetName`/`SetUsername`/`SetEmail` and the same typed
+`Set…Data` family instead of `Custom`. `Client.SetUser`/`SetRecord`/
+`Async.SetUser` take the pointer the constructor returns. The deprecated
+`Event.OccurrenceId` alias is gone — `SetId` is the one way to set an
+occurrence id.
 
 ## Moved out: the feedback-platform SSO helper
 

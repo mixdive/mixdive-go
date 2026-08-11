@@ -19,9 +19,9 @@ import (
 // split apart and always reach the server together.
 //
 // Delivery is best-effort: calls still queued when the process exits
-// without a successful Close are lost. Set Event.Id to a value derived from
-// your own data (an entity id, for example) when the same action may be
-// enqueued more than once — the server deduplicates on it.
+// without a successful Close are lost. Give an event an id derived from
+// your own data (SetId with an entity id, for example) when the same action
+// may be enqueued more than once — the server deduplicates on it.
 //
 // All methods are no-ops on a nil *Async, so an uninitialized dispatcher
 // never sends anything and never panics — leave the pointer nil to keep
@@ -36,12 +36,12 @@ type Async struct {
 	drained chan struct{}
 }
 
-// asyncSend is one queued call. items is a whole Track call — the facts of
-// one moment, which must stay together to be related; user is a standalone
-// SetUser, which has its own endpoint.
+// asyncSend is one queued call, already rendered to its wire shape. items
+// is a whole Track call — the facts of one moment, which must stay together
+// to be related; user is a standalone SetUser, which has its own endpoint.
 type asyncSend struct {
-	items []Item
-	user  *User
+	items []itemPayload
+	user  *profilePayload
 	what  string
 }
 
@@ -60,10 +60,10 @@ func WithQueueSize(n int) AsyncOption {
 }
 
 // WithErrorHandler replaces the default error handler (log.Printf). It
-// receives queue-full drops and delivery failures after the client's
-// retries are exhausted. Delivery failures are reported on the dispatcher
-// goroutine, drops on the calling goroutine — keep the handler fast and
-// never call the Async from inside it.
+// receives invalid-item drops, queue-full drops and delivery failures after
+// the client's retries are exhausted. Delivery failures are reported on the
+// dispatcher goroutine, drops on the calling goroutine — keep the handler
+// fast and never call the Async from inside it.
 func WithErrorHandler(fn func(error)) AsyncOption {
 	return func(a *Async) {
 		a.onError = fn
@@ -87,46 +87,70 @@ func NewAsync(c *Client, opts ...AsyncOption) *Async {
 }
 
 // Track enqueues the facts of one moment and returns immediately — the same
-// items Client.Track takes, delivered as one call so they stay related. If
-// the queue is full or the dispatcher is closed, the call is dropped and
-// reported to the error handler. On a nil receiver it does nothing.
+// items Client.Track takes, delivered as one call so they stay related.
+// Items are rendered to their wire shape here, at enqueue time: an invalid
+// item drops the whole call and reports it to the error handler, and later
+// changes to an item never affect what was queued. If the queue is full or
+// the dispatcher is closed, the call is dropped and reported to the error
+// handler. On a nil receiver it does nothing.
 func (a *Async) Track(items ...Item) {
 	if a == nil || len(items) == 0 {
 		return
 	}
-	// Copied, not aliased: delivery happens later on another goroutine, and
-	// a caller reusing its slice would otherwise send whatever the buffer
-	// holds by then — and race the dispatcher reading it.
-	queued := append([]Item(nil), items...)
-	a.enqueue(asyncSend{items: queued, what: describe(queued)})
+	payloads, err := itemPayloads(items)
+	if err != nil {
+		a.onError(fmt.Errorf("mixdive: async dropped invalid call: %w", err))
+		return
+	}
+	if payloads == nil {
+		return
+	}
+	a.enqueue(asyncSend{items: payloads, what: describe(payloads)})
 }
 
-// SetUser enqueues a user-profile update and returns immediately. If the
-// queue is full or the dispatcher is closed, the update is dropped and
-// reported to the error handler. On a nil receiver it does nothing.
-func (a *Async) SetUser(u User) {
+// SetUser enqueues a user-profile update and returns immediately. An
+// invalid update is dropped and reported to the error handler, as is any
+// update arriving when the queue is full or the dispatcher is closed. On a
+// nil receiver it does nothing.
+//
+// An update carrying increments is queued as a track item — mirroring
+// Client.SetUser's routing, since the flat profile endpoint has no
+// increment field.
+func (a *Async) SetUser(u *User) {
 	if a == nil {
 		return
 	}
-	a.enqueue(asyncSend{user: &u, what: fmt.Sprintf("user %q", u.Id)})
+	if u != nil && len(u.inc) > 0 {
+		p, err := u.item()
+		if err != nil {
+			a.onError(fmt.Errorf("mixdive: async dropped invalid user update: %w", err))
+			return
+		}
+		a.enqueue(asyncSend{items: []itemPayload{p}, what: fmt.Sprintf("user %q", p.Id)})
+		return
+	}
+	p, err := u.profile()
+	if err != nil {
+		a.onError(fmt.Errorf("mixdive: async dropped invalid user update: %w", err))
+		return
+	}
+	a.enqueue(asyncSend{user: &p, what: fmt.Sprintf("user %q", p.UserId)})
 }
 
 // describe names a queued call for the error handler: the first item, plus
 // how many others rode along.
-func describe(items []Item) string {
+func describe(payloads []itemPayload) string {
 	var head string
-	switch v := items[0].(type) {
-	case Event:
-		head = fmt.Sprintf("event %q", v.Key)
-	case Model:
-		head = fmt.Sprintf("record %q/%q", v.Key, v.Id)
-	case User:
-		head = fmt.Sprintf("user %q", v.Id)
+	switch p := payloads[0]; {
+	case p.Event != "":
+		head = fmt.Sprintf("event %q", p.Event)
+	case p.Model == UserModelKey:
+		head = fmt.Sprintf("user %q", p.Id)
 	default:
-		head = "item"
+		head = fmt.Sprintf("record %q/%q", p.Model, p.Id)
 	}
-	if len(items) > 1 {
-		return fmt.Sprintf("%s (+%d more)", head, len(items)-1)
+	if len(payloads) > 1 {
+		return fmt.Sprintf("%s (+%d more)", head, len(payloads)-1)
 	}
 	return head
 }
@@ -193,9 +217,9 @@ func (a *Async) deliver(send asyncSend) {
 	var err error
 	switch {
 	case len(send.items) > 0:
-		err = a.client.Track(context.Background(), send.items...)
+		err = a.client.trackPayloads(context.Background(), send.items)
 	case send.user != nil:
-		err = a.client.SetUser(context.Background(), *send.user)
+		err = a.client.post(context.Background(), "/ingest/user", *send.user)
 	default:
 		err = errors.New("mixdive: internal: empty async send")
 	}

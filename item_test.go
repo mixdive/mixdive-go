@@ -25,8 +25,8 @@ func trackServer(t *testing.T) (*Client, *capture) {
 func TestTrackSendsMixedItemsInOneCall(t *testing.T) {
 	client, cap := trackServer(t)
 	err := client.Track(context.Background(),
-		Event{Key: "post_created", Id: "p1", UserId: "u_author"},
-		Model{Key: "post", Id: "p1", Data: map[string]any{"kind": "photo"}},
+		NewEvent("post_created").SetId("p1").SetUser("u_author"),
+		NewModel("post", "p1").SetDataString("kind", "photo"),
 	)
 	if err != nil {
 		t.Fatalf("Track: %v", err)
@@ -56,7 +56,7 @@ func TestTrackSendsMixedItemsInOneCall(t *testing.T) {
 
 func TestTrackSingleEventUsesEventEndpoint(t *testing.T) {
 	client, cap := trackServer(t)
-	if err := client.Track(context.Background(), Event{Key: "app_opened"}); err != nil {
+	if err := client.Track(context.Background(), NewEvent("app_opened")); err != nil {
 		t.Fatalf("Track: %v", err)
 	}
 	// The bare event endpoint requires event_key; the alias rides along.
@@ -68,13 +68,12 @@ func TestTrackSingleEventUsesEventEndpoint(t *testing.T) {
 func TestTrackCarriesUsersWithRolesAndRefs(t *testing.T) {
 	client, cap := trackServer(t)
 	err := client.Track(context.Background(),
-		Event{
-			Key:    "post_liked",
-			Id:     "like-u9-p1",
-			Users:  []RelatedUser{{Id: "u9"}, {Id: "u_author", Role: "owner"}},
-			Models: []Ref{{Model: "post", Id: "p1"}},
-		},
-		Model{Key: "post", Id: "p1", Data: map[string]any{"like_count": 313}},
+		NewEvent("post_liked").
+			SetId("like-u9-p1").
+			AddUser("u9", "").
+			AddUser("u_author", "owner").
+			SetRelation("post", "p1"),
+		NewModel("post", "p1").SetDataInt("like_count", 313),
 	)
 	if err != nil {
 		t.Fatalf("Track: %v", err)
@@ -104,9 +103,9 @@ func TestTrackCarriesUsersWithRolesAndRefs(t *testing.T) {
 func TestUserItemTravelsInsideTrack(t *testing.T) {
 	client, cap := trackServer(t)
 	err := client.Track(context.Background(),
-		Event{Key: "user_followed", Id: "f-a-b", UserId: "a"},
-		User{Id: "a", Custom: map[string]any{"following_count": 12}},
-		User{Id: "b", Name: "Bea", Custom: map[string]any{"follower_count": 44}},
+		NewEvent("user_followed").SetId("f-a-b").SetUser("a"),
+		SetUser("a").SetDataInt("following_count", 12),
+		SetUser("b").SetName("Bea").SetDataInt("follower_count", 44),
 	)
 	if err != nil {
 		t.Fatalf("Track: %v", err)
@@ -131,13 +130,13 @@ func TestUserItemTravelsInsideTrack(t *testing.T) {
 
 func TestSetRecordSendsRecordShape(t *testing.T) {
 	client, cap := trackServer(t)
-	if err := client.SetRecord(context.Background(), Model{Key: "post", Id: "p2"}); err != nil {
+	if err := client.SetRecord(context.Background(), NewModel("post", "p2")); err != nil {
 		t.Fatalf("SetRecord: %v", err)
 	}
 	// A user record takes the same route: /ingest/user expects the flat
 	// profile shape and would silently drop `data`.
 	if err := client.SetRecord(context.Background(),
-		Model{Key: "user", Id: "u1", Data: map[string]any{"name": "Ada", "plan": "team"}}); err != nil {
+		NewModel("user", "u1").SetDataString("name", "Ada").SetDataString("plan", "team")); err != nil {
 		t.Fatalf("SetRecord user: %v", err)
 	}
 	if len(cap.bodies) != 2 {
@@ -158,46 +157,116 @@ func TestSetRecordSendsRecordShape(t *testing.T) {
 func TestItemValidationBeforeNetwork(t *testing.T) {
 	client := New("http://127.0.0.1:1", "mx_testkey", WithRetries(0))
 	ctx := context.Background()
-	if err := client.Track(ctx, Model{}); !errors.Is(err, errNoModelKey) {
+	if err := client.Track(ctx, NewModel("", "p1")); !errors.Is(err, errNoModelKey) {
 		t.Errorf("expected errNoModelKey, got %v", err)
 	}
-	// A user record has no id to generate — Mixdive never invents one.
-	if err := client.Track(ctx, Model{Key: "user"}); !errors.Is(err, errNoUserId) {
+	// Both halves of NewModel are required — a record is nothing without
+	// the id later data and references will find it under.
+	if err := client.Track(ctx, NewModel("post", "")); !errors.Is(err, errNoModelId) {
+		t.Errorf("expected errNoModelId, got %v", err)
+	}
+	// An id-less user record gets the user-specific error.
+	if err := client.Track(ctx, NewModel("user", "")); !errors.Is(err, errNoUserId) {
 		t.Errorf("expected errNoUserId for an id-less user record, got %v", err)
 	}
-	if err := client.Track(ctx, User{}); !errors.Is(err, errNoUserId) {
+	if err := client.Track(ctx, SetUser("")); !errors.Is(err, errNoUserId) {
 		t.Errorf("expected errNoUserId, got %v", err)
 	}
 	// One bad item fails the call before anything is sent.
-	if err := client.Track(ctx, Event{Key: "ok"}, Event{}); !errors.Is(err, errNoEventKey) {
+	if err := client.Track(ctx, NewEvent("ok"), NewEvent("")); !errors.Is(err, errNoEventKey) {
 		t.Errorf("expected the bad sibling to fail the call, got %v", err)
+	}
+	// A typed nil pointer means a call site built an item and lost it.
+	if err := client.Track(ctx, (*Event)(nil)); !errors.Is(err, errNilItem) {
+		t.Errorf("expected errNilItem for a nil *Event, got %v", err)
 	}
 	if err := client.Track(ctx); err != nil {
 		t.Errorf("no items must be a no-op, got %v", err)
 	}
+	if err := client.Track(ctx, nil); err != nil {
+		t.Errorf("an untyped nil item must be skipped, got %v", err)
+	}
 }
 
-func TestDeprecatedOccurrenceIdStillHonoured(t *testing.T) {
+func TestEmptyRelationsAreIgnored(t *testing.T) {
 	client, cap := trackServer(t)
-	if err := client.Track(context.Background(),
-		Event{Key: "app_opened", OccurrenceId: "legacy-1"}); err != nil {
+	err := client.Track(context.Background(),
+		NewEvent("e").AddUser("", "owner").SetRelation("post", "").SetRelation("", "p1"),
+		NewModel("post", "p1"),
+	)
+	if err != nil {
 		t.Fatalf("Track: %v", err)
 	}
-	if cap.bodies[0]["id"] != "legacy-1" {
-		t.Errorf("OccurrenceId must still set the item id: %v", cap.bodies[0])
+	ev := cap.bodies[0]["items"].([]any)[0].(map[string]any)
+	if _, present := ev["users"]; present {
+		t.Errorf("an id-less related user must be dropped: %v", ev["users"])
+	}
+	if _, present := ev["models"]; present {
+		t.Errorf("a half-named reference must be dropped: %v", ev["models"])
 	}
 }
 
-func TestRecordWithoutIdGetsNone(t *testing.T) {
+func TestIncrementDataTravelsWithAnIncId(t *testing.T) {
 	client, cap := trackServer(t)
-	// Unlike events, a record without an id is left for the server to name:
-	// generating one client-side would break merge-on-resend.
-	if err := client.Track(context.Background(),
-		Event{Key: "e"}, Model{Key: "post"}); err != nil {
+	err := client.Track(context.Background(),
+		NewEvent("post_liked").SetId("like-1"),
+		NewModel("post", "p1").
+			IncrementData("like_count", 1).
+			IncrementData("like_count", 2). // sums client-side
+			IncrementData("score", -0.5).
+			SetDataString("kind", "photo"),
+	)
+	if err != nil {
 		t.Fatalf("Track: %v", err)
 	}
 	rec := cap.bodies[0]["items"].([]any)[1].(map[string]any)
-	if _, present := rec["id"]; present {
-		t.Errorf("an id-less record must not carry a client-generated id: %v", rec)
+	inc, ok := rec["data_inc"].(map[string]any)
+	if !ok || inc["like_count"] != float64(3) || inc["score"] != float64(-0.5) {
+		t.Fatalf("wrong data_inc: %v", rec["data_inc"])
+	}
+	if id, _ := rec["inc_id"].(string); id == "" {
+		t.Error("an increment must carry an inc_id for server-side dedup")
+	}
+	if data := rec["data"].(map[string]any); data["kind"] != "photo" {
+		t.Errorf("plain data must ride alongside increments: %v", rec["data"])
+	}
+	// A record without increments carries neither field.
+	if err := client.Track(context.Background(), NewEvent("e"), NewModel("post", "p2")); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	plain := cap.bodies[1]["items"].([]any)[1].(map[string]any)
+	if _, present := plain["data_inc"]; present {
+		t.Errorf("no increments, no data_inc: %v", plain)
+	}
+	if _, present := plain["inc_id"]; present {
+		t.Errorf("no increments, no inc_id: %v", plain)
+	}
+}
+
+func TestUserIncrementsRouteToEntityEndpoint(t *testing.T) {
+	client, cap := trackServer(t)
+	// Increments cannot ride the flat profile shape, so SetUser reroutes.
+	if err := client.SetUser(context.Background(),
+		SetUser("u1").SetName("Ada").IncrementData("login_count", 1)); err != nil {
+		t.Fatalf("SetUser with increments: %v", err)
+	}
+	if err := client.SetUser(context.Background(), SetUser("u1").SetName("Ada")); err != nil {
+		t.Fatalf("SetUser plain: %v", err)
+	}
+	if cap.paths[0] != "/ingest/entity" || cap.paths[1] != "/ingest/user" {
+		t.Fatalf("wrong routing: %v", cap.paths)
+	}
+	rec := cap.bodies[0]
+	if rec["model"] != "user" || rec["id"] != "u1" {
+		t.Errorf("increment-carrying update must be a user record: %v", rec)
+	}
+	if inc, _ := rec["data_inc"].(map[string]any); inc["login_count"] != float64(1) {
+		t.Errorf("wrong data_inc: %v", rec["data_inc"])
+	}
+	if id, _ := rec["inc_id"].(string); id == "" {
+		t.Error("user increment must carry an inc_id")
+	}
+	if data := rec["data"].(map[string]any); data["name"] != "Ada" {
+		t.Errorf("profile fields must still merge into data: %v", rec["data"])
 	}
 }

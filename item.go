@@ -1,37 +1,27 @@
 package mixdive
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
-// Item is one fact you can send: an Event, a Model record, or a User
+// Item is one fact you can send: an *Event, a *Model record, or a *User
 // profile. Track takes any mix of them, which is how an event and the data
 // it concerns travel together.
 //
-// The interface is deliberately closed — its only method is unexported, so
-// the set of item kinds is exactly the ones this package defines and stays
-// in step with the ingest contract.
+// Items are built with NewEvent, NewModel and NewUser and completed with
+// setters — the wire shape is the SDK's concern, not the caller's. The
+// interface is deliberately closed: its only method is unexported, so the
+// set of item kinds is exactly the ones this package defines and stays in
+// step with the ingest contract.
 type Item interface {
 	item() (itemPayload, error)
 }
 
-// RelatedUser attaches a user to an item and says why (the wire contract's
-// `users` list). Role is free text and defaults to "actor" — the one who did
-// the thing. Anything else reads as "this was done to them": a post's author
-// on a like is Role "owner".
-//
-// The role is what makes "likes I gave" and "likes I received" two different
-// numbers on one user's page.
-type RelatedUser struct {
-	Id   string
-	Role string
-}
-
-// Ref points at a record an item touches but does not itself describe: the
-// post a comment was left on. Referencing a record that does not exist yet
-// creates it, so references never have to wait for anything.
-type Ref struct {
-	Model string
-	Id    string
-}
+// errNilItem is returned when a typed nil pointer (a nil *Event, say)
+// reaches Track — almost always a bug at the call site, unlike an untyped
+// nil Item, which is skipped.
+var errNilItem = errors.New("mixdive: nil item")
 
 // itemPayload is the wire shape of one item (docs/ingest-api.md). Exactly
 // one of Event/Model is set.
@@ -47,36 +37,27 @@ type itemPayload struct {
 	Timestamp  *time.Time     `json:"timestamp,omitempty"`
 	Properties map[string]any `json:"properties,omitempty"`
 	Data       map[string]any `json:"data,omitempty"`
+
+	// DataInc carries server-side additions to numeric data fields, and
+	// IncId is the increment's idempotency id the server deduplicates on
+	// (docs/ingest-api.md). Only model records carry them.
+	DataInc map[string]float64 `json:"data_inc,omitempty"`
+	IncId   string             `json:"inc_id,omitempty"`
 }
 
+// userPayload is one entry of the wire contract's `users` list: a user
+// related to the item, and the role saying why. An empty role means the
+// default "actor".
 type userPayload struct {
 	Id   string `json:"id"`
 	Role string `json:"role,omitempty"`
 }
 
+// refPayload is one entry of the wire contract's `models` list: a record
+// the item touches but does not itself describe.
 type refPayload struct {
 	Model string `json:"model"`
 	Id    string `json:"id"`
-}
-
-// relatedPayloads converts the shared relation fields, dropping entries with
-// no id so a zero-value struct in a slice never reaches the wire.
-func relatedPayloads(users []RelatedUser, refs []Ref) ([]userPayload, []refPayload) {
-	var us []userPayload
-	for _, u := range users {
-		if u.Id == "" {
-			continue
-		}
-		us = append(us, userPayload{Id: u.Id, Role: u.Role})
-	}
-	var rs []refPayload
-	for _, r := range refs {
-		if r.Model == "" || r.Id == "" {
-			continue
-		}
-		rs = append(rs, refPayload{Model: r.Model, Id: r.Id})
-	}
-	return us, rs
 }
 
 // Items adapts a homogeneous slice for the variadic Track/TrackBatch calls:
