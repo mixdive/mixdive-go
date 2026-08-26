@@ -28,3 +28,24 @@ func TestBuiltinEventConstructors(t *testing.T) {
 		t.Errorf("an empty method must send no properties: %v", signup["properties"])
 	}
 }
+
+func TestPageViewConstructor(t *testing.T) {
+	client, cap := trackServer(t)
+	if err := client.Track(context.Background(),
+		PageView("/pricing").SetPropertyString("title", "Pricing")); err != nil {
+		t.Fatalf("PageView: %v", err)
+	}
+	if err := client.Track(context.Background(), PageView("")); err != nil {
+		t.Fatalf("PageView empty url: %v", err)
+	}
+	view := cap.bodies[0]
+	if view["event_key"] != "page_view" {
+		t.Errorf("wrong page_view payload: %v", view)
+	}
+	if props, _ := view["properties"].(map[string]any); props["url"] != "/pricing" || props["title"] != "Pricing" {
+		t.Errorf("page_view must carry its url and title: %v", view["properties"])
+	}
+	if _, present := cap.bodies[1]["properties"]; present {
+		t.Errorf("an empty url must send no properties: %v", cap.bodies[1]["properties"])
+	}
+}

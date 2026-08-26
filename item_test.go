@@ -65,6 +65,30 @@ func TestTrackSingleEventUsesEventEndpoint(t *testing.T) {
 	}
 }
 
+func TestEventCarriesDeviceAndSession(t *testing.T) {
+	client, cap := trackServer(t)
+	err := client.Track(context.Background(),
+		NewEvent("app_opened").SetDevice("d-9f2a").SetSession("s-0d9c").SetUser("u1"))
+	if err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	got := cap.bodies[0]
+	if got["device_id"] != "d-9f2a" || got["session_id"] != "s-0d9c" {
+		t.Errorf("device/session must ride the item: %v", got)
+	}
+	// Unset, the fields must be absent — not empty strings.
+	if err := client.Track(context.Background(), NewEvent("app_opened")); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	plain := cap.bodies[1]
+	if _, present := plain["device_id"]; present {
+		t.Errorf("an unset device_id must be omitted: %v", plain)
+	}
+	if _, present := plain["session_id"]; present {
+		t.Errorf("an unset session_id must be omitted: %v", plain)
+	}
+}
+
 func TestTrackCarriesUsersWithRolesAndRefs(t *testing.T) {
 	client, cap := trackServer(t)
 	err := client.Track(context.Background(),

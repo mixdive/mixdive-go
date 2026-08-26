@@ -15,6 +15,9 @@ const (
 	// SignUpEventKey is the built-in sign-up event ("a user signed up
 	// for an account").
 	SignUpEventKey = "sign_up"
+	// PageViewEventKey is the built-in page-view event ("a page or screen
+	// was viewed") — collection addendum C4.
+	PageViewEventKey = "page_view"
 )
 
 // Login starts an occurrence of the built-in login event. method is how
@@ -46,6 +49,23 @@ func SignUp(method string) *Event {
 	e := NewEvent(SignUpEventKey)
 	if method != "" {
 		e.SetPropertyString("method", method)
+	}
+	return e
+}
+
+// PageView starts an occurrence of the built-in page-view event. url is the
+// page or screen that was viewed — its recommended parameter, typically a
+// path ("/pricing"); empty sends none. title and referrer are its other
+// reserved properties, added with SetPropertyString.
+//
+// In browsers the Mixdive web tag sends page views automatically; from a
+// backend this is the server-side-rendering case. The related built-in
+// session_end is browser-only — a backend has no session lifecycle to end,
+// so it has no constructor here.
+func PageView(url string) *Event {
+	e := NewEvent(PageViewEventKey)
+	if url != "" {
+		e.SetPropertyString("url", url)
 	}
 	return e
 }

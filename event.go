@@ -13,6 +13,8 @@ type Event struct {
 	key        string
 	id         string
 	userId     string
+	deviceId   string
+	sessionId  string
 	users      []userPayload
 	models     []refPayload
 	timestamp  time.Time
@@ -63,6 +65,26 @@ func (e *Event) AddUser(userId, role string) *Event {
 	if userId != "" {
 		e.users = append(e.users, userPayload{Id: userId, Role: role})
 	}
+	return e
+}
+
+// SetDevice ties the occurrence to the anonymous device it came from —
+// the client-generated persistent id behind visitor analytics (max 64
+// chars; Mixdive never generates one). A backend proxying client events
+// passes it through per item; there is deliberately no process-wide
+// default, which would merge every user's traffic into one visitor. An
+// item carrying both a device and a user identifies the device as that
+// user, and the server merges the device's anonymous history into them.
+func (e *Event) SetDevice(deviceId string) *Event {
+	e.deviceId = deviceId
+	return e
+}
+
+// SetSession ties the occurrence to the client's session id (renewed
+// client-side after 30 minutes of inactivity; max 64 chars). Meaningless
+// without SetDevice — the server ignores a session without a device.
+func (e *Event) SetSession(sessionId string) *Event {
+	e.sessionId = sessionId
 	return e
 }
 
@@ -140,6 +162,8 @@ func (e *Event) item() (itemPayload, error) {
 		Event:      e.key,
 		Id:         e.id,
 		UserId:     e.userId,
+		DeviceId:   e.deviceId,
+		SessionId:  e.sessionId,
 		Users:      e.users,
 		Models:     e.models,
 		Properties: e.properties,

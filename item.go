@@ -43,6 +43,12 @@ type itemPayload struct {
 	// (docs/ingest-api.md). Only model records carry them.
 	DataInc map[string]float64 `json:"data_inc,omitempty"`
 	IncId   string             `json:"inc_id,omitempty"`
+
+	// DeviceId/SessionId are the collection addendum's visitor fields
+	// (docs/collection-addendum.md, C1/C2) — client-generated identities a
+	// backend passes through per item, never defaults process-wide.
+	DeviceId  string `json:"device_id,omitempty"`
+	SessionId string `json:"session_id,omitempty"`
 }
 
 // userPayload is one entry of the wire contract's `users` list: a user
