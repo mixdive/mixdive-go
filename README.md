@@ -174,17 +174,17 @@ client.Track(mixdive.NewEvent("post_liked").
 	SetId("like-u9-p1"). // unique per like, not the post id
 	SetEventUser("u9").
 	AddUser("u_author", "owner").
-	SetRelation("post", "p1"))
+	SetDataModelRelation("post", "p1"))
 ```
 
 That one call answers three questions in the panel: how many likes `u9` gave
 (their `actor` counter), how many `u_author` received (their `owner` counter),
 and how many post `p1` received (the post's own counter).
 
-`SetRelation` names records the event *touches* but does not describe (call
-it once per record). Relating a record that does not exist yet creates it —
-empty, with counters — and it fills in whenever its data arrives, in any
-order.
+`SetDataModelRelation` names records the event *touches* but does not
+describe (call it once per record). Relating a record that does not exist
+yet creates it — empty, with counters — and it fills in whenever its data
+arrives, in any order.
 
 ### Profile changes that belong to an event
 
@@ -205,7 +205,7 @@ it — the server does the arithmetic:
 
 ```go
 client.Track(
-	mixdive.NewEvent("post_viewed").SetEventUser("u9").SetRelation("post", "p1"),
+	mixdive.NewEvent("post_viewed").SetEventUser("u9").SetDataModelRelation("post", "p1"),
 	mixdive.NewModel("post", "p1").IncrementData("view_count", 1),
 )
 ```
@@ -283,6 +283,9 @@ client.Track(mixdive.NewEvent("app_opened").SetEventUser(userId))
   read as the `SetUser` profile constructor sitting beside it in the same
   call. The profile constructor, `Client.SetUser` and the builders'
   `AddUser` are unchanged.
+- The event builder's `SetRelation` is now `SetDataModelRelation`, naming
+  what it points at. A record's `SetRelation` (record → record) keeps its
+  name.
 - The synchronous, error-returning calls are gone. Where you awaited a send,
   call the fire-and-forget method and use `Flush(ctx)`/`Close(ctx)` when you
   need delivery to have happened (a short-lived job, a test).

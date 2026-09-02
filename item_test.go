@@ -91,7 +91,7 @@ func TestTrackCarriesUsersWithRolesAndRefs(t *testing.T) {
 			SetId("like-u9-p1").
 			AddUser("u9", "").
 			AddUser("u_author", "owner").
-			SetRelation("post", "p1"),
+			SetDataModelRelation("post", "p1"),
 		NewModel("post", "p1").SetDataInt("like_count", 313),
 	)
 	flushed(t, client)
@@ -290,7 +290,7 @@ func TestItemValidationAtTheCall(t *testing.T) {
 func TestEmptyRelationsAreIgnored(t *testing.T) {
 	client, cap := trackServer(t)
 	client.Track(
-		NewEvent("e").AddUser("", "owner").SetRelation("post", "").SetRelation("", "p1"),
+		NewEvent("e").AddUser("", "owner").SetDataModelRelation("post", "").SetDataModelRelation("", "p1"),
 		NewModel("post", "p1"),
 	)
 	flushed(t, client)

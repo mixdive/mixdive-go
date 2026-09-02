@@ -43,7 +43,7 @@
 //	    SetId("like-u9-p1").
 //	    SetEventUser("u9").
 //	    AddUser("u_author", "owner").
-//	    SetRelation("post", "p1"))
+//	    SetDataModelRelation("post", "p1"))
 //
 // Nothing is defined up front: event keys, model keys and roles all
 // auto-register on first receipt, and every id is optional except a user's.

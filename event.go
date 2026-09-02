@@ -31,7 +31,7 @@ type Event struct {
 //	client.Track(mixdive.NewEvent("post_liked").
 //	    SetId("like-u9-p1").
 //	    SetEventUser("u9").
-//	    SetRelation("post", "p1"))
+//	    SetDataModelRelation("post", "p1"))
 //
 // An event is not safe for concurrent use and must not be modified after
 // it is handed to Track.
@@ -92,12 +92,12 @@ func (e *Event) SetSession(sessionId string) *Event {
 	return e
 }
 
-// SetRelation relates the occurrence to a record it concerns: the post a
-// like was given to, which is what makes "likes this post received" a
-// number. Call it once per related record. Relating a record that does not
-// exist yet creates it, so relations never have to wait for anything. An
-// empty model or id is ignored.
-func (e *Event) SetRelation(model, id string) *Event {
+// SetDataModelRelation relates the occurrence to a data-model record it
+// concerns: the post a like was given to, which is what makes "likes this
+// post received" a number. Call it once per related record. Relating a
+// record that does not exist yet creates it, so relations never have to
+// wait for anything. An empty model or id is ignored.
+func (e *Event) SetDataModelRelation(model, id string) *Event {
 	if model != "" && id != "" {
 		e.models = append(e.models, refPayload{Model: model, Id: id})
 	}
