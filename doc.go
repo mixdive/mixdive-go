@@ -2,6 +2,17 @@
 // product analytics tool: create a Client with an app API key, then send
 // what happened in your product to your Mixdive server.
 //
+// The Client is built so analytics can never hurt the application hosting
+// it. Every call — Track, SetUser, SetRecord, TrackBatch — enqueues onto a
+// bounded in-memory queue and returns immediately, with nothing to check:
+// a background goroutine delivers the calls in order, retries transient
+// failures, and reports what still fails to the error handler (default:
+// log.Printf). A full queue drops the oldest queued call rather than
+// slowing the caller; a nil *Client and a Client constructed without a
+// server URL or API key are safe no-ops; a panic anywhere in delivery or in
+// the error handler is contained. Call Close on shutdown to flush what is
+// still queued, or Flush to wait for delivery mid-run.
+//
 // There are three kinds of thing to send, and Track takes any mix of them.
 // Each is started by its constructor and completed with chainable setters —
 // the wire shape is the SDK's concern, not the caller's:
@@ -16,8 +27,8 @@
 // the event and the record it concerns travel together and neither has to
 // name the other:
 //
-//	client.Track(ctx,
-//	    mixdive.NewEvent("post_created").SetId("post-created-p1").SetUser("u9"),
+//	client.Track(
+//	    mixdive.NewEvent("post_created").SetId("post-created-p1").SetEventUser("u9"),
 //	    mixdive.NewModel("post", "p1").SetDataString("kind", "photo"))
 //
 // The ids differ on purpose: occurrence ids share one namespace across every
@@ -28,9 +39,9 @@
 // users with a role each — that is what makes "likes this post received" and
 // "likes this author received" different numbers:
 //
-//	client.Track(ctx, mixdive.NewEvent("post_liked").
+//	client.Track(mixdive.NewEvent("post_liked").
 //	    SetId("like-u9-p1").
-//	    SetUser("u9").
+//	    SetEventUser("u9").
 //	    AddUser("u_author", "owner").
 //	    SetRelation("post", "p1"))
 //
@@ -48,10 +59,6 @@
 // binary's VCS revision (the commit it was built from, when the binary was
 // built inside a git checkout); WithAppVersion overrides it, and
 // WithAppVersion("") turns it off.
-//
-// Client sends synchronously; wrap it in an Async dispatcher (NewAsync)
-// when sends must never block the caller — calls then enqueue and return
-// immediately while a background goroutine delivers them in order.
 //
 // This is the SDK for Mixdive itself. Mixdive's feedback platform is a
 // separate product with its own SDK, package mixdivefeedback in

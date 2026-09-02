@@ -38,6 +38,14 @@ type itemPayload struct {
 	Properties map[string]any `json:"properties,omitempty"`
 	Data       map[string]any `json:"data,omitempty"`
 
+	// Count/Sum/Duration are the event measures (docs/ingest-api.md,
+	// measures addendum M1): count folds repeated happenings into one
+	// occurrence and multiplies every counter it moves, sum and duration
+	// accumulate into the event's totals. Only events carry them.
+	Count    int64   `json:"count,omitempty"`
+	Sum      float64 `json:"sum,omitempty"`
+	Duration float64 `json:"duration,omitempty"` // seconds
+
 	// DataInc carries server-side additions to numeric data fields, and
 	// IncId is the increment's idempotency id the server deduplicates on
 	// (docs/ingest-api.md). Only model records carry them.
@@ -68,7 +76,7 @@ type refPayload struct {
 
 // Items adapts a homogeneous slice for the variadic Track/TrackBatch calls:
 //
-//	client.TrackBatch(ctx, mixdive.Items(events)...)
+//	client.TrackBatch(mixdive.Items(events)...)
 func Items[T Item](s []T) []Item {
 	out := make([]Item, len(s))
 	for i, v := range s {

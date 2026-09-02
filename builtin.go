@@ -24,7 +24,7 @@ const (
 // they signed in ("google", "email") — the event's one recommended
 // parameter; empty sends none. Complete it like any event:
 //
-//	client.Track(ctx, mixdive.Login("google").SetUser(userId))
+//	client.Track(mixdive.Login("google").SetEventUser(userId))
 //
 // A user logging in twice is two occurrences — leave the id generated
 // unless your delivery pipeline redelivers, in which case SetId a value
@@ -42,8 +42,8 @@ func Login(method string) *Event {
 // signs up once, so give it a deterministic id derived from the user and
 // send the new profile in the same call:
 //
-//	client.Track(ctx,
-//	    mixdive.SignUp("email").SetId("sign-up-"+userId).SetUser(userId),
+//	client.Track(
+//	    mixdive.SignUp("email").SetId("sign-up-"+userId).SetEventUser(userId),
 //	    mixdive.SetUser(userId).SetName(name))
 func SignUp(method string) *Event {
 	e := NewEvent(SignUpEventKey)

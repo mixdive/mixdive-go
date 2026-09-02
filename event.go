@@ -1,7 +1,6 @@
 package mixdive
 
 import (
-	"context"
 	"errors"
 	"time"
 )
@@ -18,6 +17,9 @@ type Event struct {
 	users      []userPayload
 	models     []refPayload
 	timestamp  time.Time
+	count      int64
+	sum        float64
+	duration   float64 // seconds
 	properties map[string]any
 }
 
@@ -26,9 +28,9 @@ type Event struct {
 // Everything else is optional and added with setters, each returning the
 // event for chaining:
 //
-//	client.Track(ctx, mixdive.NewEvent("post_liked").
+//	client.Track(mixdive.NewEvent("post_liked").
 //	    SetId("like-u9-p1").
-//	    SetUser("u9").
+//	    SetEventUser("u9").
 //	    SetRelation("post", "p1"))
 //
 // An event is not safe for concurrent use and must not be modified after
@@ -46,11 +48,13 @@ func (e *Event) SetId(id string) *Event {
 	return e
 }
 
-// SetUser ties the occurrence to the user who did it — one user in the
+// SetEventUser ties the occurrence to the user who did it — one user in the
 // default role "actor". Ids are always supplied by your systems (typically
 // UUIDs — Mixdive never generates them); without one the occurrence is
-// anonymous, counting toward event totals only.
-func (e *Event) SetUser(userId string) *Event {
+// anonymous, counting toward event totals only. It is the same id the
+// SetUser profile constructor takes; the names differ so a Track call
+// reading both stays unambiguous.
+func (e *Event) SetEventUser(userId string) *Event {
 	e.userId = userId
 	return e
 }
@@ -104,6 +108,40 @@ func (e *Event) SetRelation(model, id string) *Event {
 // time counts.
 func (e *Event) SetTimestamp(t time.Time) *Event {
 	e.timestamp = t
+	return e
+}
+
+// SetCount folds repeated happenings into this one occurrence — "bought 3
+// items" is one occurrence with a count of 3, and it moves every counter
+// by 3. Unset means 1; values below 2 are not sent (the server reads
+// anything but a positive whole number as 1, capped at 1 000 000).
+func (e *Event) SetCount(count int) *Event {
+	if count > 1 {
+		e.count = int64(count)
+	} else {
+		e.count = 0
+	}
+	return e
+}
+
+// SetSum accumulates a number into the event's sum total — the money of a
+// purchase, the points of a score. Negative values subtract (a refund);
+// the report shows the range's total and per-event average. Zero is not
+// sent.
+func (e *Event) SetSum(sum float64) *Event {
+	e.sum = sum
+	return e
+}
+
+// SetDuration reports how long the event took, accumulated into the
+// event's duration total. Sent as seconds, sub-second precision kept;
+// zero and negative durations are not sent.
+func (e *Event) SetDuration(d time.Duration) *Event {
+	if d > 0 {
+		e.duration = d.Seconds()
+	} else {
+		e.duration = 0
+	}
 	return e
 }
 
@@ -166,6 +204,9 @@ func (e *Event) item() (itemPayload, error) {
 		SessionId:  e.sessionId,
 		Users:      e.users,
 		Models:     e.models,
+		Count:      e.count,
+		Sum:        e.sum,
+		Duration:   e.duration,
 		Properties: e.properties,
 	}
 	if p.Id == "" {
@@ -185,60 +226,9 @@ type eventPayload struct {
 	EventKey string `json:"event_key"`
 }
 
-// Track sends the facts of one moment in a single call: an event, the record
-// it concerns, the user profiles it changes — any mix, in any order.
-//
-//	client.Track(ctx,
-//	    mixdive.NewEvent("post_created").SetId("post-created-p1").SetUser("u9"),
-//	    mixdive.NewModel("post", "p1").SetDataString("kind", "photo"))
-//
-// Items sent together are related to each other server-side, so neither has
-// to name the other. Use TrackBatch for unrelated items.
-//
-// A nil error means the server queued them (fast-ack); built-in retries
-// reuse the same ids and never double-count. An item that fails validation
-// fails the whole call before anything is sent. No items is a no-op.
-func (c *Client) Track(ctx context.Context, items ...Item) error {
-	payloads, err := itemPayloads(items)
-	if err != nil || payloads == nil {
-		return err
-	}
-	return c.trackPayloads(ctx, payloads)
-}
-
-// trackPayloads routes converted items. One item that is a plain event goes
-// to the endpoint built for it: there is nothing for it to be related to,
-// and older servers know it. Everything else travels as a track envelope.
-func (c *Client) trackPayloads(ctx context.Context, payloads []itemPayload) error {
-	if len(payloads) == 1 && payloads[0].Event != "" {
-		return c.post(ctx, "/ingest/event", eventPayload{payloads[0], payloads[0].Event})
-	}
-	return c.post(ctx, "/ingest/track", struct {
-		Items []itemPayload `json:"items"`
-	}{payloads})
-}
-
-// TrackBatch sends many independent items in one request, preserving order.
-// Unlike Track, items in a batch are NOT related to one another — a batch is
-// many moments, not one.
-//
-// The whole request shares the server's size cap (32 KB by default) — split
-// large batches. No items is a no-op.
-//
-//	client.TrackBatch(ctx, mixdive.Items(events)...)
-func (c *Client) TrackBatch(ctx context.Context, items ...Item) error {
-	payloads, err := itemPayloads(items)
-	if err != nil || payloads == nil {
-		return err
-	}
-	return c.post(ctx, "/ingest/batch", struct {
-		Items []itemPayload `json:"items"`
-	}{payloads})
-}
-
 // itemPayloads converts every item up front, so a bad one fails the call
 // before any bytes leave the process. A nil result means there was nothing
-// to send: no items at all, or only nil ones — Track(ctx, nil) is a no-op
+// to send: no items at all, or only nil ones — Track(nil) is a no-op
 // rather than a panic. A typed nil pointer, though, is an error: it means
 // a call site built an item and lost it.
 func itemPayloads(items []Item) ([]itemPayload, error) {

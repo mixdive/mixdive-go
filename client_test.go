@@ -33,6 +33,35 @@ func (c *capture) handler(status int, response string) http.HandlerFunc {
 	}
 }
 
+// errCollector is a WithErrorHandler sink tests inspect after flushing.
+type errCollector struct {
+	mu   sync.Mutex
+	errs []error
+}
+
+func (ec *errCollector) add(err error) {
+	ec.mu.Lock()
+	ec.errs = append(ec.errs, err)
+	ec.mu.Unlock()
+}
+
+func (ec *errCollector) all() []error {
+	ec.mu.Lock()
+	defer ec.mu.Unlock()
+	return append([]error(nil), ec.errs...)
+}
+
+// flushed waits until everything enqueued so far has been delivered —
+// sending is fire-and-forget, so tests flush before asserting on captures.
+func flushed(t *testing.T, c *Client) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+}
+
 func TestTrackSendsContractPayload(t *testing.T) {
 	cap := &capture{}
 	mux := http.NewServeMux()
@@ -40,15 +69,15 @@ func TestTrackSendsContractPayload(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	client := New(srv.URL+"/", "mx_testkey") // trailing slash must not break the URL
+	client := New(srv.URL+"/", "mx_testkey", // trailing slash must not break the URL
+		WithErrorHandler(func(err error) { t.Errorf("unexpected error: %v", err) }))
 	ts := time.Date(2026, 8, 5, 14, 3, 22, 0, time.UTC)
-	err := client.Track(context.Background(), NewEvent("checkout_completed").
-		SetUser("user-1").
+	client.Track(NewEvent("checkout_completed").
+		SetEventUser("user-1").
 		SetTimestamp(ts).
 		SetPropertyString("plan", "team"))
-	if err != nil {
-		t.Fatalf("Track: %v", err)
-	}
+	flushed(t, client)
+
 	if len(cap.bodies) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(cap.bodies))
 	}
@@ -82,10 +111,11 @@ func TestTrackRetriesReuseItemId(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	client := New(srv.URL, "mx_testkey", WithRetries(2))
-	if err := client.Track(context.Background(), NewEvent("app_opened")); err != nil {
-		t.Fatalf("Track after retry: %v", err)
-	}
+	client := New(srv.URL, "mx_testkey", WithRetries(2),
+		WithErrorHandler(func(err error) { t.Errorf("unexpected error: %v", err) }))
+	client.Track(NewEvent("app_opened"))
+	flushed(t, client)
+
 	if len(cap.bodies) != 2 {
 		t.Fatalf("expected 2 attempts, got %d", len(cap.bodies))
 	}
@@ -102,10 +132,15 @@ func TestTrackBatchEnvelope(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	client := New(srv.URL, "mx_testkey")
-	err := client.TrackBatch(context.Background(), Items([]*Event{NewEvent("a"), NewEvent("b")})...)
-	if err != nil {
-		t.Fatalf("TrackBatch: %v", err)
+	client := New(srv.URL, "mx_testkey",
+		WithErrorHandler(func(err error) { t.Errorf("unexpected error: %v", err) }))
+	client.TrackBatch(Items([]*Event{NewEvent("a"), NewEvent("b")})...)
+	client.TrackBatch()    // no items is a no-op
+	client.TrackBatch(nil) // and so is an untyped nil item
+	flushed(t, client)
+
+	if len(cap.bodies) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(cap.bodies))
 	}
 	items, ok := cap.bodies[0]["items"].([]any)
 	if !ok || len(items) != 2 {
@@ -120,9 +155,6 @@ func TestTrackBatchEnvelope(t *testing.T) {
 			t.Errorf("item %d missing event key", i)
 		}
 	}
-	if err := client.TrackBatch(context.Background(), nil); err != nil {
-		t.Errorf("empty batch must be a no-op, got %v", err)
-	}
 }
 
 func TestSetUserOmitsEmptyFields(t *testing.T) {
@@ -132,13 +164,13 @@ func TestSetUserOmitsEmptyFields(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	client := New(srv.URL, "mx_testkey")
-	err := client.SetUser(context.Background(), SetUser("user-1").
+	client := New(srv.URL, "mx_testkey",
+		WithErrorHandler(func(err error) { t.Errorf("unexpected error: %v", err) }))
+	client.SetUser(SetUser("user-1").
 		SetName("Ada Lovelace").
 		SetDataString("plan", "team"))
-	if err != nil {
-		t.Fatalf("SetUser: %v", err)
-	}
+	flushed(t, client)
+
 	got := cap.bodies[0]
 	if got["user_id"] != "user-1" || got["name"] != "Ada Lovelace" {
 		t.Errorf("wrong payload: %v", got)
@@ -150,33 +182,49 @@ func TestSetUserOmitsEmptyFields(t *testing.T) {
 	}
 }
 
-func TestPermanentAPIErrorIsNotRetried(t *testing.T) {
+func TestPermanentAPIErrorIsReportedNotRetried(t *testing.T) {
 	cap := &capture{}
 	mux := http.NewServeMux()
 	mux.Handle("POST /ingest/event", cap.handler(http.StatusUnauthorized, `{"error":"unknown or revoked API key"}`))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	client := New(srv.URL, "mx_wrong", WithRetries(3))
-	err := client.Track(context.Background(), NewEvent("app_opened"))
+	ec := &errCollector{}
+	client := New(srv.URL, "mx_wrong", WithRetries(3), WithErrorHandler(ec.add))
+	client.Track(NewEvent("app_opened"))
+	flushed(t, client)
+
+	if len(cap.bodies) != 1 {
+		t.Errorf("401 must not be retried; got %d attempts", len(cap.bodies))
+	}
+	errs := ec.all()
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 reported error, got %d: %v", len(errs), errs)
+	}
 	var apiErr *APIError
-	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401 APIError, got %v", err)
+	if !errors.As(errs[0], &apiErr) || apiErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected a 401 APIError, got %v", errs[0])
 	}
 	if apiErr.Message != "unknown or revoked API key" {
 		t.Errorf("wrong message: %q", apiErr.Message)
 	}
-	if len(cap.bodies) != 1 {
-		t.Errorf("401 must not be retried; got %d attempts", len(cap.bodies))
-	}
 }
 
-func TestValidationBeforeNetwork(t *testing.T) {
-	client := New("http://127.0.0.1:1", "mx_testkey", WithRetries(0))
-	if err := client.Track(context.Background(), NewEvent("")); !errors.Is(err, errNoEventKey) {
-		t.Errorf("expected errNoEventKey, got %v", err)
+// Invalid items are dropped at the call — reported synchronously to the
+// error handler, before anything could leave the process.
+func TestInvalidItemsReportedAtTheCall(t *testing.T) {
+	ec := &errCollector{}
+	client := New("http://127.0.0.1:1", "mx_testkey", WithRetries(0), WithErrorHandler(ec.add))
+	client.Track(NewEvent(""))
+	client.SetUser(SetUser(""))
+	errs := ec.all()
+	if len(errs) != 2 {
+		t.Fatalf("expected 2 reported drops, got %d: %v", len(errs), errs)
 	}
-	if err := client.SetUser(context.Background(), SetUser("")); !errors.Is(err, errNoUserId) {
-		t.Errorf("expected errNoUserId, got %v", err)
+	if !errors.Is(errs[0], errNoEventKey) {
+		t.Errorf("expected errNoEventKey, got %v", errs[0])
+	}
+	if !errors.Is(errs[1], errNoUserId) {
+		t.Errorf("expected errNoUserId, got %v", errs[1])
 	}
 }

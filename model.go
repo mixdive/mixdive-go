@@ -1,7 +1,6 @@
 package mixdive
 
 import (
-	"context"
 	"errors"
 	"time"
 )
@@ -30,8 +29,8 @@ type Model struct {
 // event key — and id identifies this record within it, your own id, the one
 // your database uses. Both are required.
 //
-//	client.Track(ctx,
-//	    mixdive.NewEvent("post_created").SetId("post-created-p1").SetUser("u9"),
+//	client.Track(
+//	    mixdive.NewEvent("post_created").SetId("post-created-p1").SetEventUser("u9"),
 //	    mixdive.NewModel("post", "p1").SetDataString("kind", "photo"))
 //
 // A record is not safe for concurrent use and must not be modified after
@@ -162,19 +161,4 @@ func (m *Model) item() (itemPayload, error) {
 		p.IncId = newItemId()
 	}
 	return p, nil
-}
-
-// SetRecord creates or updates one record on its own, for migrations and
-// nightly syncs. Track is the call to reach for when the record changed
-// because something happened — it carries both facts together.
-//
-// A user record goes to the same endpoint as every other: /ingest/entity
-// routes it to the profile write path, whereas /ingest/user expects the
-// flat profile shape and would silently ignore its data.
-func (c *Client) SetRecord(ctx context.Context, m *Model) error {
-	p, err := m.item()
-	if err != nil {
-		return err
-	}
-	return c.post(ctx, "/ingest/entity", p)
 }

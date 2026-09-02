@@ -1,7 +1,6 @@
 package mixdive
 
 import (
-	"context"
 	"errors"
 	"time"
 )
@@ -14,23 +13,28 @@ import (
 // the event that caused it — a follow moving two follower counts is one
 // call, not three.
 type User struct {
-	id       string
-	name     string
-	username string
-	email    string
-	data     map[string]any
-	inc      map[string]float64
+	id           string
+	name         string
+	username     string
+	email        string
+	organization string
+	phone        string
+	picture      string
+	gender       string
+	birthYear    int
+	data         map[string]any
+	inc          map[string]float64
 }
 
 // SetUser starts a profile update for the user with this id — the same
-// client-supplied id (typically a UUID) an event's SetUser takes. Required:
-// Mixdive never invents a user id.
+// client-supplied id (typically a UUID) an event's SetEventUser takes.
+// Required: Mixdive never invents a user id.
 //
 // It is SetUser, not NewUser, because the caller cannot know whether
 // Mixdive has seen this user before — and never has to: sending is
 // create-or-update either way.
 //
-//	client.SetUser(ctx, mixdive.SetUser(userId).
+//	client.SetUser(mixdive.SetUser(userId).
 //	    SetName("Ada Lovelace").
 //	    SetDataString("plan", "team"))
 //
@@ -55,6 +59,44 @@ func (u *User) SetUsername(username string) *User {
 // SetEmail updates the predefined email field.
 func (u *User) SetEmail(email string) *User {
 	u.email = email
+	return u
+}
+
+// SetOrganization updates the predefined organization field — the company
+// or team the user belongs to.
+func (u *User) SetOrganization(organization string) *User {
+	u.organization = organization
+	return u
+}
+
+// SetPhone updates the predefined phone field.
+func (u *User) SetPhone(phone string) *User {
+	u.phone = phone
+	return u
+}
+
+// SetPicture updates the predefined picture field — a URL to the user's
+// avatar image.
+func (u *User) SetPicture(url string) *User {
+	u.picture = url
+	return u
+}
+
+// SetGender updates the predefined gender field — free text ("F", "male",
+// whatever your product records).
+func (u *User) SetGender(gender string) *User {
+	u.gender = gender
+	return u
+}
+
+// SetBirthYear updates the predefined birth-year field. Zero and negative
+// years are not sent (the server ignores them anyway).
+func (u *User) SetBirthYear(year int) *User {
+	if year > 0 {
+		u.birthYear = year
+	} else {
+		u.birthYear = 0
+	}
 	return u
 }
 
@@ -120,11 +162,16 @@ func (u *User) IncrementData(key string, by float64) *User {
 // profilePayload is the /ingest/user wire shape, which keeps `user_id` as
 // its required field name.
 type profilePayload struct {
-	UserId   string         `json:"user_id"`
-	Name     string         `json:"name,omitempty"`
-	Username string         `json:"username,omitempty"`
-	Email    string         `json:"email,omitempty"`
-	Custom   map[string]any `json:"custom,omitempty"`
+	UserId       string         `json:"user_id"`
+	Name         string         `json:"name,omitempty"`
+	Username     string         `json:"username,omitempty"`
+	Email        string         `json:"email,omitempty"`
+	Organization string         `json:"organization,omitempty"`
+	Phone        string         `json:"phone,omitempty"`
+	Picture      string         `json:"picture,omitempty"`
+	Gender       string         `json:"gender,omitempty"`
+	BirthYear    int            `json:"birth_year,omitempty"`
+	Custom       map[string]any `json:"custom,omitempty"`
 }
 
 var errNoUserId = errors.New("mixdive: user id is required")
@@ -139,14 +186,21 @@ func (u *User) item() (itemPayload, error) {
 	if u.id == "" {
 		return itemPayload{}, errNoUserId
 	}
-	data := make(map[string]any, len(u.data)+3)
+	data := make(map[string]any, len(u.data)+8)
 	for k, v := range u.data {
 		data[k] = v
 	}
-	for k, v := range map[string]string{"name": u.name, "username": u.username, "email": u.email} {
+	for k, v := range map[string]string{
+		"name": u.name, "username": u.username, "email": u.email,
+		"organization": u.organization, "phone": u.phone,
+		"picture": u.picture, "gender": u.gender,
+	} {
 		if v != "" {
 			data[k] = v
 		}
+	}
+	if u.birthYear > 0 {
+		data["birth_year"] = u.birthYear
 	}
 	p := itemPayload{Model: UserModelKey, Id: u.id, Data: data, DataInc: u.inc}
 	if len(u.inc) > 0 {
@@ -157,7 +211,8 @@ func (u *User) item() (itemPayload, error) {
 
 // profile renders the update in the flat /ingest/user shape. Increments
 // cannot ride on it — that endpoint has no increment field, which is why
-// Client.SetUser routes an increment-carrying update as a record instead.
+// Client.SetUser routes an increment-carrying update as a user record
+// instead.
 func (u *User) profile() (profilePayload, error) {
 	if u == nil {
 		return profilePayload{}, errNilItem
@@ -166,31 +221,15 @@ func (u *User) profile() (profilePayload, error) {
 		return profilePayload{}, errNoUserId
 	}
 	return profilePayload{
-		UserId:   u.id,
-		Name:     u.name,
-		Username: u.username,
-		Email:    u.email,
-		Custom:   u.data,
+		UserId:       u.id,
+		Name:         u.name,
+		Username:     u.username,
+		Email:        u.email,
+		Organization: u.organization,
+		Phone:        u.phone,
+		Picture:      u.picture,
+		Gender:       u.gender,
+		BirthYear:    u.birthYear,
+		Custom:       u.data,
 	}, nil
-}
-
-// SetUser creates or updates a user profile on its own. A nil error means
-// the server queued the update (fast-ack).
-//
-// An update carrying increments posts to /ingest/entity — the same profile
-// write path, reached through the endpoint whose contract has an increment
-// field; everything else posts to the flat /ingest/user endpoint.
-func (c *Client) SetUser(ctx context.Context, u *User) error {
-	if u != nil && len(u.inc) > 0 {
-		p, err := u.item()
-		if err != nil {
-			return err
-		}
-		return c.post(ctx, "/ingest/entity", p)
-	}
-	p, err := u.profile()
-	if err != nil {
-		return err
-	}
-	return c.post(ctx, "/ingest/user", p)
 }
