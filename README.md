@@ -3,6 +3,8 @@
 Official Go SDK for [Mixdive](https://mixdive.com) — self-hosted product
 analytics. Send an event, get its report screen automatically.
 
+Documentation: **[docs.mixdive.com](https://docs.mixdive.com)** — concepts, integrations, the ingest API.
+
 ```
 go get github.com/mixdive/mixdive-go
 ```
