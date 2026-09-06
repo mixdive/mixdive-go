@@ -5,6 +5,9 @@ analytics. Send an event, get its report screen automatically.
 
 Documentation: **[docs.mixdive.com](https://docs.mixdive.com)** — concepts, integrations, the ingest API.
 
+More SDKs are on the way. Missing one for your language or platform? Tell us
+at [hello@mixdive.com](mailto:hello@mixdive.com) — requests set the order.
+
 ```
 go get github.com/mixdive/mixdive-go
 ```
