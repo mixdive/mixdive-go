@@ -1,12 +1,13 @@
 # mixdive-go
 
-Official Go SDK for [Mixdive](https://mixdive.com) — self-hosted product
+The official Go SDK for [Mixdive](https://mixdive.com), self-hosted product
 analytics. Send an event, get its report screen automatically.
 
-Documentation: **[docs.mixdive.com](https://docs.mixdive.com)** — concepts, integrations, the ingest API.
+Concepts, integrations and the ingest API are documented at
+**[docs.mixdive.com](https://docs.mixdive.com)**.
 
 More SDKs are on the way. Missing one for your language or platform? Tell us
-at [hello@mixdive.com](mailto:hello@mixdive.com) — requests set the order.
+at [hello@mixdive.com](mailto:hello@mixdive.com). Requests set the order.
 
 ```
 go get github.com/mixdive/mixdive-go
@@ -34,7 +35,7 @@ import (
 func main() {
 	client := mixdive.New("https://analytics.example.com", "mx_your_api_key")
 
-	// Send an event. Calls return immediately — a background goroutine
+	// Send an event. Calls return immediately. A background goroutine
 	// delivers them, so analytics never slows your code down. Unknown keys
 	// auto-register on first receipt; there is no schema to set up.
 	client.Track(mixdive.NewEvent("checkout_completed").
@@ -51,8 +52,8 @@ func main() {
 	)
 
 	// Set who that user is. Merge semantics: send only what changed.
-	// SetUser, not NewUser — you never have to know whether Mixdive has
-	// seen this user before.
+	// The constructor is called SetUser because you never have to know
+	// whether Mixdive has seen this user before.
 	client.SetUser(mixdive.SetUser("9f1c53de-6f0e-4a0b-9f2a-1c53de6f0e4a").
 		SetName("Ada Lovelace").
 		SetEmail("ada@example.com"))
@@ -70,34 +71,33 @@ The client is designed so it cannot hurt the application hosting it,
 whatever the analytics server is doing:
 
 - **Every call returns immediately.** `Track`, `SetUser`, `SetRecord` and
-  `TrackBatch` enqueue onto a bounded in-memory queue; one background
-  goroutine delivers the calls in order, retrying transient failures
-  (default 2 retries, doubling backoff). A slow or unreachable server costs
-  your request path nothing.
-- **Nothing to check at the call site.** Sends return no error. Failures —
-  invalid items, queue overflow, delivery that failed for good — go to the
-  error handler, which defaults to `log.Printf` and is replaceable with
-  `WithErrorHandler`. A panic inside delivery *or inside your handler* is
-  contained, never raised into your application.
-- **A full queue drops the oldest call, never blocks the newest.** The
-  queue holds 1024 calls by default (`WithQueueSize`); overflow is reported
-  to the error handler. Analytics never applies back-pressure.
-- **Off is safe, twice over.** Every method is a no-op on a nil `*Client` —
-  gating analytics is just not constructing it. And `New` called with an
-  empty server URL or API key returns a client that is *off*: it says so
-  once through the error handler, then every call is a silent, instant
-  no-op. Misconfiguration cannot crash you, block you, or fail later and
-  stranger.
-- **Shutdown is explicit.** `Close(ctx)` stops intake and drains the queue
-  (bounded by your context); `Flush(ctx)` waits for delivery mid-run — for
-  a batch job that must not exit ahead of its data. Items still queued when
-  the process dies without a `Close` are lost; that trade (in-memory,
-  zero dependencies, nothing written to disk) is deliberate.
+  `TrackBatch` enqueue onto a bounded in-memory queue. One background
+  goroutine delivers them in order and retries transient failures (default 2
+  retries, doubling backoff). A slow or unreachable server costs your request
+  path nothing.
+- There is **nothing to check at the call site**. Sends return no error.
+  Invalid items, queue overflow and delivery that failed for good all go to
+  the error handler instead. It defaults to `log.Printf` and is replaceable with
+  `WithErrorHandler`. A panic inside delivery, or inside your own handler, is
+  contained and never raised into your application.
+- **A full queue drops its oldest call.** Never the newest. It holds 1024
+  calls by default (`WithQueueSize`), and every overflow is reported to the
+  error handler.
+- **Off is safe, twice over.** Every method is a no-op on a nil `*Client`, so
+  gating analytics is a matter of not constructing one. `New` called with an
+  empty server URL or API key returns a client that is *off*: it says so once
+  through the error handler, and every call after that is a silent, instant
+  no-op. Misconfiguration cannot crash you or block you.
+- **Shutdown is explicit.** `Close(ctx)` stops intake and drains the queue,
+  bounded by your context. `Flush(ctx)` waits for delivery mid-run, which a
+  batch job needs if it must not exit ahead of its data. Items still queued
+  when the process dies without a `Close` are lost. That is the price of an
+  in-memory queue with zero dependencies and nothing written to disk.
 
 One `Track` call is queued as one unit, so the items of a moment are never
 split apart. If the same action can be enqueued more than once (a task
 retry, for example), give the event an id derived from your own data with
-`SetId` — the server deduplicates on it, so re-sends never double-count.
+`SetId`. The server deduplicates on it, so re-sends never double-count.
 
 ## Events, records and users
 
@@ -106,13 +106,13 @@ and completed with setters:
 
 | Constructor | Means | Id |
 |---|---|---|
-| `NewEvent(key)` | something happened | `SetId` — the occurrence id, generated if you never set it |
-| `NewModel(key, id)` | a record of a thing you track (`post` p1) | required at construction — your own id, the one your database uses |
-| `SetUser(id)` | a profile — the one built-in model | required at construction; Mixdive never invents a user id |
+| `NewEvent(key)` | something happened | `SetId`, the occurrence id, generated if you never set it |
+| `NewModel(key, id)` | a record of a thing you track (`post` p1) | required at construction: your own id, the one your database uses |
+| `SetUser(id)` | a profile, the one built-in model | required at construction; Mixdive never invents a user id |
 
-An event names who did it with `SetEventUser(userId)` — the same
-client-supplied id the `SetUser` profile constructor takes. The names
-differ so a call that uses both reads unambiguously:
+An event names who did it with `SetEventUser(userId)`. That takes the same
+client-supplied id as the `SetUser` profile constructor. The names differ so
+a call using both reads unambiguously:
 
 ```go
 client.Track(
@@ -121,37 +121,36 @@ client.Track(
 )
 ```
 
-Fields go on with typed setters — `SetPropertyString`, `SetPropertyInt`,
-`SetPropertyFloat`, `SetPropertyBool`, `SetPropertyTimestamp` (takes a
-`time.Time`), and `SetPropertyAny` for objects — with the same family named
-`SetData…` on records and profiles. Profiles additionally have a setter per
-predefined field: `SetName`, `SetUsername`, `SetEmail`, `SetOrganization`,
+Fields go on with typed setters: `SetPropertyString`, `SetPropertyInt`,
+`SetPropertyFloat`, `SetPropertyBool`, `SetPropertyTimestamp` (which takes a
+`time.Time`) and `SetPropertyAny` for objects. Records and profiles carry the
+same family under the name `SetData…`. Profiles additionally have a setter
+per predefined field: `SetName`, `SetUsername`, `SetEmail`, `SetOrganization`,
 `SetPhone`, `SetPicture` (an avatar URL), `SetGender` and `SetBirthYear`.
 
 ### Event measures
 
-Three measures ride the occurrence itself — count, sum and
-duration:
+Three measures ride the occurrence itself: count, sum and duration.
 
 ```go
 client.Track(mixdive.NewEvent("item_purchase").
 	SetEventUser(userId).
-	SetCount(3).                 // one occurrence, three happenings — every counter moves by 3
+	SetCount(3).                 // one occurrence, three happenings: every counter moves by 3
 	SetSum(129.90).              // accumulated into the event's sum total (money, points)
 	SetDuration(90*time.Second)) // accumulated into the event's duration total
 ```
 
 The report shows the range's sum and duration totals with per-event
-averages; events that never send measures see no change. `SetSum` takes
-negative values too (a refund subtracts).
+averages. Events that never send measures see no change. `SetSum` takes
+negative values too, so a refund subtracts.
 
-Model keys, event keys and roles all auto-register on first receipt. There is
-nothing to define up front and no schema to keep in sync.
+Model keys, event keys and roles all auto-register on first receipt. Nothing
+to define up front, and no schema to keep in sync.
 
 ### Built-in events
 
 Like the built-in `user` model, some events are defined at the Mixdive
-level — every project has them out of the box, named in the panel before
+level. Every project has them out of the box, named in the panel before
 their first occurrence. They follow [GA4's recommended
 events](https://developers.google.com/analytics/devguides/collection/ga4/reference/events),
 and each has a constructor that pre-fills the key and takes the event's
@@ -170,9 +169,9 @@ They return an ordinary `*Event`, so every event setter chains as usual.
 ### Several users, with roles
 
 An item can relate to more than one user, and the role says why.
-`SetEventUser` is shorthand for one user in the default role `actor` — the
-one who did it. `AddUser` attaches the others; any role but `actor` reads
-as "this was done to them".
+`SetEventUser` is shorthand for one user in the default role `actor`: the one
+who did it. `AddUser` attaches the others. Any role but `actor` reads as
+"this was done to them".
 
 ```go
 client.Track(mixdive.NewEvent("post_liked").
@@ -188,7 +187,7 @@ and how many post `p1` received (the post's own counter).
 
 `SetDataModelRelation` names records the event *touches* but does not
 describe (call it once per record). Relating a record that does not exist
-yet creates it — empty, with counters — and it fills in whenever its data
+yet creates it, empty but with counters, and it fills in whenever its data
 arrives, in any order.
 
 ### Profile changes that belong to an event
@@ -206,7 +205,7 @@ client.Track(
 ### Increments
 
 When you don't know a field's current value, add to it instead of setting
-it — the server does the arithmetic:
+it. The server does the arithmetic:
 
 ```go
 client.Track(
@@ -217,7 +216,7 @@ client.Track(
 
 Each send carries a generated increment id the server deduplicates on, so
 the SDK's built-in HTTP retries never double-apply. Two separate `Track`
-calls are two increments, though — if your pipeline can replay the same
+calls are two increments, though. If your pipeline can replay the same
 action (a task queue redelivering), prefer the idempotent absolute set
 (`SetDataInt`). Incrementing a field that currently holds a non-number
 fails that item server-side.
@@ -226,22 +225,22 @@ fails that item server-side.
 
 - **Fast-ack:** the server queues accepted data (HTTP 202) and reports
   typically reflect it within a minute.
-- **Safe retries:** every event carries an id (auto-generated unless you
-  call `SetId` yourself). The server deduplicates on it, so the SDK's
-  built-in retries — and your own re-sends with a fixed id — never
-  double-count. Re-sending a record with a known id merges into it rather
-  than creating a second one.
-- **Track relates, TrackBatch does not:** one `Track` call is one moment and
-  its items are related to each other; a batch is many independent moments
-  sharing one request (order preserved).
+- **Safe retries.** Every event carries an id, auto-generated unless you call
+  `SetId` yourself. The server deduplicates on it, so neither the SDK's
+  built-in retries nor your own re-sends with a fixed id can double-count.
+  Re-sending a record with a known id merges into it rather than creating a
+  second one.
+- **Track relates, TrackBatch does not.** One `Track` call is one moment, and
+  its items are related to each other. A batch is many independent moments
+  sharing one request, in the order you gave them.
 - **Retry policy:** HTTP 503 and transport errors are retried (default 2
-  retries, doubling backoff from 200 ms); any other non-2xx is permanent and
+  retries, doubling backoff from 200 ms). Any other non-2xx is permanent and
   goes to the error handler as an `*APIError`.
-- **User ids are yours:** Mixdive never generates user ids — pass the same
+- **User ids are yours.** Mixdive never generates one. Pass the same
   client-supplied id (typically a UUID) to an event's `SetEventUser` and to
   the `SetUser` profile constructor.
 - **Size cap:** requests over the server's limit (32 KB by default) are
-  rejected — split large batches.
+  rejected, so split large batches.
 
 ## Configuration
 
@@ -255,18 +254,18 @@ client := mixdive.New(serverUrl, apiKey,
 )
 ```
 
-`WithAppVersion` feeds the `X-App-Version` header Mixdive stamps on every
-occurrence and breaks reports down by; unset, it defaults to the host
-binary's VCS revision (when built inside a git checkout), and `""` turns it
-off.
+`WithAppVersion` feeds the `X-App-Version` header that Mixdive stamps on
+every occurrence and breaks reports down by. Unset, it defaults to the host
+binary's VCS revision, when the binary was built inside a git checkout.
+Passing `""` turns it off.
 
 ## Upgrading from the Client/Async split
 
 Earlier versions had a synchronous `Client` (methods took a `context.Context`
 and returned an `error`) and an `Async` wrapper around it. There is now one
-`Client`, and it works the way `Async` did — the industry-standard shape for
-analytics SDKs: enqueue, background delivery, errors to a handler, never the
-caller. Mechanical translation:
+`Client`, and it works the way `Async` did. That is the shape most analytics
+SDKs settled on: enqueue, deliver in the background, hand errors to a handler
+rather than to the caller. Mechanical translation:
 
 ```go
 // before
@@ -275,16 +274,16 @@ analytics := mixdive.NewAsync(client, mixdive.WithQueueSize(4096))
 analytics.Track(mixdive.NewEvent("app_opened").SetUser(userId))
 _ = client.Track(ctx, mixdive.NewEvent("app_opened").SetUser(userId)) // sync path
 
-// after — one client, one behavior
+// after: one client, one behavior
 client := mixdive.New(serverUrl, apiKey, mixdive.WithQueueSize(4096))
 client.Track(mixdive.NewEvent("app_opened").SetEventUser(userId))
 ```
 
-- `NewAsync` is gone; `New` starts the dispatcher itself. `AsyncOption` and
+- `NewAsync` is gone. `New` starts the dispatcher itself. `AsyncOption` and
   `Option` are one type now, so `WithQueueSize`/`WithErrorHandler` pass to
   `New` alongside `WithRetries`/`WithHTTPClient`/`WithAppVersion`.
 - `*mixdive.Async` in signatures becomes `*mixdive.Client` (still nil-safe).
-- The event builder's `SetUser` is now `SetEventUser` — it was too easy to
+- The event builder's `SetUser` is now `SetEventUser`. It was too easy to
   read as the `SetUser` profile constructor sitting beside it in the same
   call. The profile constructor, `Client.SetUser` and the builders'
   `AddUser` are unchanged.
@@ -295,7 +294,7 @@ client.Track(mixdive.NewEvent("app_opened").SetEventUser(userId))
   call the fire-and-forget method and use `Flush(ctx)`/`Close(ctx)` when you
   need delivery to have happened (a short-lived job, a test).
 - If either constructor argument may be empty in some environments, you no
-  longer need to guard construction — such a client turns itself off.
+  longer need to guard construction. Such a client turns itself off.
 
 ## Moved out: the feedback-platform SSO helper
 
@@ -307,7 +306,7 @@ now lives in its own module, so this SDK carries no dependencies at all:
 // before
 mxd := mixdive.NewMixDive(portalUrl, ssoSecret)
 
-// after — go get github.com/mixdive/mixdive-feedback-go
+// after: go get github.com/mixdive/mixdive-feedback-go
 mxd := mixdivefeedback.New(portalUrl, ssoSecret)
 ```
 
