@@ -126,7 +126,9 @@ Fields go on with typed setters: `SetPropertyString`, `SetPropertyInt`,
 `time.Time`) and `SetPropertyAny` for objects. Records and profiles carry the
 same family under the name `SetData…`. Profiles additionally have a setter
 per predefined field: `SetName`, `SetUsername`, `SetEmail`, `SetOrganization`,
-`SetPhone`, `SetPicture` (an avatar URL), `SetGender` and `SetBirthYear`.
+`SetPhone`, `SetPicture` (the absolute http(s) URL of a photo, shown beside the
+name in the console), `SetGender` and `SetBirthYear`. Usernames need not be
+unique.
 
 ### Event measures
 
@@ -239,7 +241,7 @@ fails that item server-side.
 - **User ids are yours.** Mixdive never generates one. Pass the same
   client-supplied id (typically a UUID) to an event's `SetEventUser` and to
   the `SetUser` profile constructor.
-- **Size cap:** requests over the server's limit (32 KB by default) are
+- **Size cap:** requests over the server's limit (32 KB, the same on every installation) are
   rejected, so split large batches.
 
 ## Configuration

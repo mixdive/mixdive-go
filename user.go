@@ -50,7 +50,8 @@ func (u *User) SetName(name string) *User {
 	return u
 }
 
-// SetUsername updates the predefined username field.
+// SetUsername updates the predefined username field. A username is a label
+// for people to read and need not be unique; the user id tells users apart.
 func (u *User) SetUsername(username string) *User {
 	u.username = username
 	return u
@@ -75,8 +76,10 @@ func (u *User) SetPhone(phone string) *User {
 	return u
 }
 
-// SetPicture updates the predefined picture field — a URL to the user's
-// avatar image.
+// SetPicture updates the predefined picture field: the URL of the user's
+// photo, which the console shows beside their name. The server keeps only an
+// absolute http(s) URL of at most 2048 characters and ignores anything else,
+// leaving the stored photo as it was.
 func (u *User) SetPicture(url string) *User {
 	u.picture = url
 	return u

@@ -55,9 +55,10 @@ func (m *Model) AddUser(userId, role string) *Model {
 	return m
 }
 
-// SetRelation relates this record to another one it references. Call it
-// once per related record; relating a record that does not exist yet
-// creates it. An empty model or id is ignored.
+// SetRelation relates this record to another one it references, such as a
+// card to its account. The server keeps it as a link, listed on both records'
+// screens, and moves no counter. Call it once per related record; relating a
+// record that does not exist yet creates it. An empty model or id is ignored.
 func (m *Model) SetRelation(model, id string) *Model {
 	if model != "" && id != "" {
 		m.models = append(m.models, refPayload{Model: model, Id: id})
